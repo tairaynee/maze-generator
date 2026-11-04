@@ -26,6 +26,20 @@ export interface BookMaze {
   subjIdx: number;
 }
 
+/** A printable text page: instructions, intro, section title, or blank notes. */
+export interface TextPage {
+  id: string;
+  /** Optional heading. Empty means the page has no title. */
+  title: string;
+  /** Multi-line body. Empty is a blank page. */
+  body: string;
+}
+
+/** One slot in the book, in reading order. Text pages and mazes share this list. */
+export type BookPage =
+  | { kind: 'maze'; id: string; maze: BookMaze }
+  | ({ kind: 'text' } & TextPage);
+
 interface BuildOpts {
   skipAI?: boolean;
   forceProcedural?: boolean;
@@ -325,13 +339,208 @@ const PAGE_FORMATS: Record<PageSize, 'a4' | [number, number]> = {
   '6x9': [6 * 72, 9 * 72],
 };
 
+/** Trim size in inches. A4 uses the exact 210×297 mm sheet. */
+const PAGE_INCHES: Record<PageSize, { w: number; h: number }> = {
+  a4: { w: 210 / 25.4, h: 297 / 25.4 },
+  '5x8': { w: 5, h: 8 },
+  '6x9': { w: 6, h: 9 },
+};
+
+export function pageAspectRatio(size: PageSize): string {
+  const { w, h } = PAGE_INCHES[size];
+  return `${w} / ${h}`;
+}
+
+function createId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createTextPage(title = '', body = ''): BookPage {
+  return { kind: 'text', id: createId('text'), title, body };
+}
+
+function mazeToPage(maze: BookMaze): BookPage {
+  return { kind: 'maze', id: createId('maze'), maze };
+}
+
+/**
+ * Replace maze slots with a new batch. Text pages stay where
+ * they are. Extra mazes are inserted after the last maze so a trailing
+ * text page (an outro) stays at the end. A book that is only text pages
+ * gets the new mazes appended after them.
+ */
+export function replaceMazeBatch(pages: BookPage[], mazes: BookMaze[]): BookPage[] {
+  const fresh = mazes.map(mazeToPage);
+  let mi = 0;
+  const out: BookPage[] = [];
+  for (const p of pages) {
+    if (p.kind === 'text') out.push(p);
+    else if (mi < fresh.length) out.push(fresh[mi++]);
+  }
+  if (mi < fresh.length) {
+    const rest = fresh.slice(mi);
+    let insertAt = out.length;
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (out[i].kind === 'maze') {
+        insertAt = i + 1;
+        break;
+      }
+    }
+    out.splice(insertAt, 0, ...rest);
+  }
+  return out;
+}
+
+function asLines(value: string | string[]): string[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+function wrapCanvasLine(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxW: number,
+): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines: string[] = [];
+  let cur = '';
+  const breakLong = (word: string): string => {
+    let chunk = '';
+    for (const ch of word) {
+      const trial = chunk + ch;
+      if (chunk && ctx.measureText(trial).width > maxW) {
+        lines.push(chunk);
+        chunk = ch;
+      } else {
+        chunk = trial;
+      }
+    }
+    return chunk;
+  };
+  for (const word of words) {
+    const trial = cur ? `${cur} ${word}` : word;
+    if (ctx.measureText(trial).width <= maxW) {
+      cur = trial;
+      continue;
+    }
+    if (cur) lines.push(cur);
+    cur = ctx.measureText(word).width > maxW ? breakLong(word) : word;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+/** White page at the trim size, for ZIP / single-page PNG export. */
+export function renderTextPageCanvas(
+  title: string,
+  body: string,
+  pageSize: PageSize,
+  dpi = 140,
+): HTMLCanvasElement {
+  const spec = PAGE_INCHES[pageSize];
+  const w = Math.max(1, Math.round(spec.w * dpi));
+  const h = Math.max(1, Math.round(spec.h * dpi));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#fbf7f0';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#141820';
+
+  const margin = Math.max(28, w * 0.1);
+  const maxW = w - margin * 2;
+  const bottom = h - margin;
+  let y = margin;
+
+  const heading = title.trim();
+  if (heading) {
+    const titleSize = Math.min(48, Math.max(22, w * 0.048));
+    ctx.font = `bold ${titleSize}px Helvetica, Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const lineH = titleSize * 1.25;
+    for (const line of wrapCanvasLine(ctx, heading, maxW)) {
+      if (y + lineH > bottom) return canvas;
+      ctx.fillText(line, w / 2, y);
+      y += lineH;
+    }
+    y += titleSize * 0.45;
+  }
+
+  const bodySize = Math.min(28, Math.max(15, w * 0.03));
+  ctx.font = `${bodySize}px Helvetica, Arial, sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const lineH = bodySize * 1.45;
+  const paragraphs = body.replace(/\r\n/g, '\n').split('\n');
+  for (const para of paragraphs) {
+    if (!para.trim()) {
+      y += lineH * 0.65;
+      continue;
+    }
+    for (const line of wrapCanvasLine(ctx, para, maxW)) {
+      if (y + lineH > bottom) return canvas;
+      ctx.fillText(line, margin, y);
+      y += lineH;
+    }
+  }
+  return canvas;
+}
+
+/** Vector text on the current PDF page. One book item is one page; overflow is clipped. */
+function placeTextPage(pdf: jsPDF, title: string, body: string) {
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  const margin = Math.max(36, pw * 0.1);
+  const maxW = pw - margin * 2;
+  const maxY = ph - margin;
+  const titleSize = Math.min(22, Math.max(16, pw * 0.048));
+  const bodySize = Math.min(13, Math.max(11, pw * 0.03));
+
+  pdf.setTextColor(20, 24, 32);
+  let y = margin;
+
+  const heading = title.trim();
+  if (heading) {
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(titleSize);
+    const lineH = titleSize * 1.25;
+    y += titleSize * 0.85;
+    for (const line of asLines(pdf.splitTextToSize(heading, maxW))) {
+      if (y > maxY) return;
+      pdf.text(line, pw / 2, y, { align: 'center' });
+      y += lineH;
+    }
+    y += titleSize * 0.35;
+  }
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(bodySize);
+  const lineH = bodySize * 1.45;
+  if (!heading) y += bodySize;
+  const paragraphs = body.replace(/\r\n/g, '\n').split('\n');
+  for (const para of paragraphs) {
+    if (!para.trim()) {
+      y += lineH * 0.65;
+      continue;
+    }
+    for (const line of asLines(pdf.splitTextToSize(para, maxW))) {
+      if (y > maxY) return;
+      pdf.text(line, margin, y);
+      y += lineH;
+    }
+  }
+}
+
 export async function exportBookPdf(
-  book: BookMaze[],
+  pages: BookPage[],
   keyword: string,
   mode: SolutionMode,
   pageSize: PageSize,
   onProgress: (done: number, total: number) => void,
 ) {
+  if (!pages.length) return;
   const pdf = new jsPDF({
     orientation: 'portrait',
     unit: 'pt',
@@ -341,6 +550,8 @@ export async function exportBookPdf(
   const ph = pdf.internal.pageSize.getHeight();
   const name = titleCase(keyword);
   const CELL = 18;
+  const mazeCount = pages.filter((p) => p.kind === 'maze').length;
+  const textCount = pages.length - mazeCount;
 
   // Cover (jsPDF starts with one page already).
   const coverTitle = Math.min(48, pw * 0.1);
@@ -350,41 +561,61 @@ export async function exportBookPdf(
   pdf.text(`${name} Mazes`, pw / 2, ph * 0.42, { align: 'center' });
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(coverSub);
+  const coverBits: string[] = [];
+  if (mazeCount) coverBits.push(`${mazeCount} puzzle${mazeCount === 1 ? '' : 's'}`);
+  if (textCount) coverBits.push(`${textCount} text page${textCount === 1 ? '' : 's'}`);
+  if (mazeCount) {
+    coverBits.push(
+      `solutions ${mode === 'after-each' ? 'after each maze' : 'at the back'}`,
+    );
+  }
+  const subtitle = coverBits.join('  ·  ') || 'Maze book';
   pdf.text(
-    `${book.length} puzzles  ·  solutions ${
-      mode === 'after-each' ? 'after each maze' : 'at the back'
-    }`,
+    asLines(pdf.splitTextToSize(subtitle, pw * 0.8)),
     pw / 2,
     ph * 0.42 + coverTitle * 0.9,
     { align: 'center' },
   );
 
-  const total = mode === 'after-each' ? book.length : book.length * 2;
+  // after-each counts one step per maze (the solution is part of that step).
+  // at-end counts maze pages and solution pages separately. Text pages always count.
+  const total = (mode === 'after-each' ? mazeCount : mazeCount * 2) + textCount;
   let done = 0;
+  let step = 0;
 
   const fmt = PAGE_FORMATS[pageSize];
+  const mazes: BookMaze[] = [];
 
-  for (let i = 0; i < book.length; i++) {
-    const { maze, markers } = book[i];
-    const tag = `Maze ${i + 1}`;
-    pdf.addPage(fmt, 'portrait');
-    placeImage(pdf, renderToCanvas(maze, CELL, false, markers), tag);
-    if (mode === 'after-each') {
+  for (const item of pages) {
+    if (item.kind === 'text') {
       pdf.addPage(fmt, 'portrait');
-      placeImage(
-        pdf,
-        renderToCanvas(maze, CELL, true, markers),
-        `${tag} — Solution`,
-      );
+      placeTextPage(pdf, item.title, item.body);
+      done++;
+      onProgress(done, total);
+    } else {
+      mazes.push(item.maze);
+      const tag = `Maze ${mazes.length}`;
+      const { maze, markers } = item.maze;
+      pdf.addPage(fmt, 'portrait');
+      placeImage(pdf, renderToCanvas(maze, CELL, false, markers), tag);
+      if (mode === 'after-each') {
+        pdf.addPage(fmt, 'portrait');
+        placeImage(
+          pdf,
+          renderToCanvas(maze, CELL, true, markers),
+          `${tag} — Solution`,
+        );
+      }
+      done++;
+      onProgress(done, total);
     }
-    done++;
-    onProgress(done, total);
-    if (i % 4 === 0) await tick();
+    step++;
+    if (step % 4 === 0) await tick();
   }
 
   if (mode === 'at-end') {
-    for (let i = 0; i < book.length; i++) {
-      const { maze, markers } = book[i];
+    for (let i = 0; i < mazes.length; i++) {
+      const { maze, markers } = mazes[i];
       pdf.addPage(fmt, 'portrait');
       placeImage(
         pdf,
@@ -401,28 +632,43 @@ export async function exportBookPdf(
 }
 
 export async function exportBookZip(
-  book: BookMaze[],
+  pages: BookPage[],
   keyword: string,
+  pageSize: PageSize,
   onProgress: (done: number, total: number) => void,
 ) {
   const zip = new JSZip();
   const mazeDir = zip.folder('mazes')!;
   const solDir = zip.folder('solutions')!;
+  const textDir = zip.folder('text-pages')!;
   const pad = (n: number) => String(n).padStart(3, '0');
   const CELL = 22;
+  const total = Math.max(1, pages.length);
+  let mazeNo = 0;
+  let textNo = 0;
 
-  for (let i = 0; i < book.length; i++) {
-    const { maze, markers } = book[i];
-    const tag = `Maze ${i + 1}`;
-    const q = renderToCanvas(maze, CELL, false, markers, tag)
-      .toDataURL('image/png')
-      .split(',')[1];
-    const a = renderToCanvas(maze, CELL, true, markers, `${tag} — Solution`)
-      .toDataURL('image/png')
-      .split(',')[1];
-    mazeDir.file(`maze-${pad(i + 1)}.png`, q, { base64: true });
-    solDir.file(`solution-${pad(i + 1)}.png`, a, { base64: true });
-    onProgress(i + 1, book.length);
+  for (let i = 0; i < pages.length; i++) {
+    const item = pages[i];
+    if (item.kind === 'text') {
+      textNo++;
+      const png = renderTextPageCanvas(item.title, item.body, pageSize)
+        .toDataURL('image/png')
+        .split(',')[1];
+      textDir.file(`text-${pad(textNo)}.png`, png, { base64: true });
+    } else {
+      mazeNo++;
+      const { maze, markers } = item.maze;
+      const tag = `Maze ${mazeNo}`;
+      const q = renderToCanvas(maze, CELL, false, markers, tag)
+        .toDataURL('image/png')
+        .split(',')[1];
+      const a = renderToCanvas(maze, CELL, true, markers, `${tag} — Solution`)
+        .toDataURL('image/png')
+        .split(',')[1];
+      mazeDir.file(`maze-${pad(mazeNo)}.png`, q, { base64: true });
+      solDir.file(`solution-${pad(mazeNo)}.png`, a, { base64: true });
+    }
+    onProgress(i + 1, total);
     if (i % 3 === 0) await tick();
   }
 
