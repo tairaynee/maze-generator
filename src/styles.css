@@ -297,6 +297,122 @@ canvas.overlay {
   opacity: 0.85;
 }
 
+.text-tools {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.text-tools h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.text-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #0c1326;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.field .opt {
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.field input[type='text'],
+.field textarea {
+  width: 100%;
+  background: #0c1326;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 9px 10px;
+  border-radius: 9px;
+  font: inherit;
+  resize: vertical;
+}
+
+.text-edit .field input[type='text'],
+.text-edit .field textarea {
+  background: #121a30;
+}
+
+.field textarea {
+  min-height: 76px;
+}
+
+.field input[type='text']:focus,
+.field textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+button.danger {
+  border-color: #7c2740;
+  color: #ffb4c4;
+}
+
+button.danger:hover {
+  background: #3a1620;
+}
+
+.page-frame.text-sheet {
+  background: #fbf7f0;
+  color: #1a1c22;
+  padding: 0;
+}
+
+.text-sheet-inner {
+  flex: 1;
+  min-height: 0;
+  padding: 11% 10% 9%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.text-sheet-title {
+  margin: 0 0 0.55em;
+  text-align: center;
+  font-size: clamp(18px, 2.6vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: #141820;
+  text-transform: none;
+  line-height: 1.25;
+}
+
+.text-sheet-body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: clamp(13px, 1.65vw, 16.5px);
+  line-height: 1.45;
+  color: #1c2030;
+  font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, serif;
+}
+
+.text-sheet-empty {
+  margin: auto;
+  text-align: center;
+  color: #8a8175;
+  font-size: 14px;
+}
+
 .pager {
   display: flex;
   align-items: center;
@@ -304,6 +420,7 @@ canvas.overlay {
   gap: 16px;
   margin-top: 20px;
   color: var(--muted);
+  flex-wrap: wrap;
 }
 
 .pager strong {
