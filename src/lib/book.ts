@@ -35,10 +35,42 @@ export interface TextPage {
   body: string;
 }
 
-/** One slot in the book, in reading order. Text pages and mazes share this list. */
+/** How an uploaded picture sits on the trim. Aspect ratio is kept either way,
+ *  and the picture is never cropped.
+ *  - `full`: scaled to the whole page. A cover drawn for this trim fills the
+ *    sheet; other shapes get a cream letterbox.
+ *  - `inset`: same contain-fit inside a margin of IMAGE_INSET_PERCENT of the
+ *    page width, on the cream paper used for text pages.
+ */
+export type ImageFit = 'full' | 'inset';
+
+/** Minimum margin for `inset` image pages, as a percent of page width. */
+export const IMAGE_INSET_PERCENT = 7;
+
+/** Cream paper shared by text pages and image letterboxing. */
+const PAGE_PAPER = '#fbf7f0';
+const PAGE_PAPER_RGB = { r: 251, g: 247, b: 240 } as const;
+
+/** An uploaded picture used as its own book page (cover or interior). */
+export interface ImagePage {
+  id: string;
+  /** File name without its extension, shown in the page list. */
+  name: string;
+  /** PNG or JPEG data URL. WebP and JPEG uploads are stored as JPEG. */
+  dataUrl: string;
+  width: number;
+  height: number;
+  /** `cover` is the book cover. When a cover is page 1, PDF export uses it
+   *  as the first page and skips the generated title page. */
+  role: 'cover' | 'image';
+  fit: ImageFit;
+}
+
+/** One slot in the book, in reading order. Mazes, text, and images share this list. */
 export type BookPage =
   | { kind: 'maze'; id: string; maze: BookMaze }
-  | ({ kind: 'text' } & TextPage);
+  | ({ kind: 'text' } & TextPage)
+  | ({ kind: 'image' } & ImagePage);
 
 interface BuildOpts {
   skipAI?: boolean;
@@ -359,22 +391,183 @@ export function createTextPage(title = '', body = ''): BookPage {
   return { kind: 'text', id: createId('text'), title, body };
 }
 
+const IMAGE_MIME = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+]);
+const IMAGE_EXT = /\.(png|jpe?g|webp)$/i;
+const MAX_IMAGE_EDGE = 3200;
+const MAX_IMAGE_BYTES = 40 * 1024 * 1024;
+
+function isAcceptedImageFile(file: File): boolean {
+  const type = file.type.toLowerCase();
+  if (IMAGE_MIME.has(type)) return true;
+  if (type && type !== 'application/octet-stream') return false;
+  return IMAGE_EXT.test(file.name);
+}
+
+function readFileAsDataURL(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Could not read that image.'));
+    };
+    reader.onerror = () => reject(new Error('Could not read that image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not read that image.'));
+    img.src = src;
+  });
+}
+
+function sourceSize(source: CanvasImageSource): { width: number; height: number } {
+  if (source instanceof HTMLImageElement) {
+    return { width: source.naturalWidth, height: source.naturalHeight };
+  }
+  if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
+    return { width: source.width, height: source.height };
+  }
+  return { width: 0, height: 0 };
+}
+
+function rasterize(
+  source: CanvasImageSource,
+  sw: number,
+  sh: number,
+  mime: 'image/png' | 'image/jpeg',
+): { dataUrl: string; width: number; height: number } {
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(sw, sh));
+  const width = Math.max(1, Math.round(sw * scale));
+  const height = Math.max(1, Math.round(sh * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not read that image.');
+  if (mime === 'image/jpeg') {
+    ctx.fillStyle = PAGE_PAPER;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, width, height);
+  const dataUrl =
+    mime === 'image/jpeg' ? canvas.toDataURL(mime, 0.92) : canvas.toDataURL(mime);
+  return { dataUrl, width, height };
+}
+
+async function decodeOriented(file: File): Promise<CanvasImageSource> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch {
+      /* fall through to an <img> decode */
+    }
+  }
+  return loadImage(await readFileAsDataURL(file));
+}
+
+function closeSource(source: CanvasImageSource) {
+  if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
+    source.close();
+  }
+}
+
+function fileStem(name: string, fallback: string): string {
+  const stem = name.replace(/\.[^.]+$/, '').trim();
+  return stem || fallback;
+}
+
+function isPngFile(file: File): boolean {
+  const type = file.type.toLowerCase();
+  if (type === 'image/png') return true;
+  if (type === 'image/jpeg' || type === 'image/jpg' || type === 'image/webp') return false;
+  return /\.png$/i.test(file.name);
+}
+
+/** Read a PNG, JPEG, or WebP file into an image page. Large pictures are
+ *  scaled down so a cover stays sharp on A4 without a huge PDF. */
+export async function createImagePage(
+  file: File,
+  role: 'cover' | 'image',
+): Promise<BookPage> {
+  const label = file.name || 'That file';
+  if (!isAcceptedImageFile(file)) {
+    throw new Error(`“${label}” isn’t a PNG, JPEG, or WebP image.`);
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error(`“${label}” is larger than 40 MB. Use a smaller image.`);
+  }
+  const name = fileStem(file.name, role === 'cover' ? 'Cover' : 'Image');
+  let dataUrl: string;
+  let width: number;
+  let height: number;
+
+  if (isPngFile(file)) {
+    dataUrl = await readFileAsDataURL(file);
+    const img = await loadImage(dataUrl);
+    width = img.naturalWidth;
+    height = img.naturalHeight;
+    if (!width || !height) throw new Error(`“${label}” could not be read.`);
+    if (Math.max(width, height) > MAX_IMAGE_EDGE) {
+      const raster = rasterize(img, width, height, 'image/png');
+      dataUrl = raster.dataUrl;
+      width = raster.width;
+      height = raster.height;
+    }
+  } else {
+    const source = await decodeOriented(file);
+    try {
+      const size = sourceSize(source);
+      width = size.width;
+      height = size.height;
+      if (!width || !height) throw new Error(`“${label}” could not be read.`);
+      const raster = rasterize(source, width, height, 'image/jpeg');
+      dataUrl = raster.dataUrl;
+      width = raster.width;
+      height = raster.height;
+    } finally {
+      closeSource(source);
+    }
+  }
+
+  return {
+    kind: 'image',
+    id: createId(role === 'cover' ? 'cover' : 'image'),
+    name,
+    dataUrl,
+    width,
+    height,
+    role,
+    fit: role === 'cover' ? 'full' : 'inset',
+  };
+}
+
 function mazeToPage(maze: BookMaze): BookPage {
   return { kind: 'maze', id: createId('maze'), maze };
 }
 
 /**
- * Replace maze slots with a new batch. Text pages stay where
+ * Replace maze slots with a new batch. Text and image pages stay where
  * they are. Extra mazes are inserted after the last maze so a trailing
- * text page (an outro) stays at the end. A book that is only text pages
- * gets the new mazes appended after them.
+ * text or image page stays at the end. A book that is only text and
+ * image pages gets the new mazes appended after them.
  */
 export function replaceMazeBatch(pages: BookPage[], mazes: BookMaze[]): BookPage[] {
   const fresh = mazes.map(mazeToPage);
   let mi = 0;
   const out: BookPage[] = [];
   for (const p of pages) {
-    if (p.kind === 'text') out.push(p);
+    if (p.kind !== 'maze') out.push(p);
     else if (mi < fresh.length) out.push(fresh[mi++]);
   }
   if (mi < fresh.length) {
@@ -444,7 +637,7 @@ export function renderTextPageCanvas(
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#fbf7f0';
+  ctx.fillStyle = PAGE_PAPER;
   ctx.fillRect(0, 0, w, h);
   ctx.fillStyle = '#141820';
 
@@ -485,6 +678,64 @@ export function renderTextPageCanvas(
       y += lineH;
     }
   }
+  return canvas;
+}
+
+/** Where a picture lands on a page of `pageW`×`pageH`, in those same units.
+ *  Image pixel size is only used for aspect ratio. */
+export function imagePlacement(
+  pageW: number,
+  pageH: number,
+  imgW: number,
+  imgH: number,
+  fit: ImageFit,
+): { x: number; y: number; w: number; h: number } {
+  if (!(imgW > 0) || !(imgH > 0) || !(pageW > 0) || !(pageH > 0)) {
+    return { x: 0, y: 0, w: pageW, h: pageH };
+  }
+  const margin = fit === 'full' ? 0 : (pageW * IMAGE_INSET_PERCENT) / 100;
+  const availW = Math.max(1, pageW - margin * 2);
+  const availH = Math.max(1, pageH - margin * 2);
+  const scale = Math.min(availW / imgW, availH / imgH);
+  const w = imgW * scale;
+  const h = imgH * scale;
+  return { x: (pageW - w) / 2, y: (pageH - h) / 2, w, h };
+}
+
+/** CSS insets, as percents of the page box, matching `inset` placement.
+ *  Horizontal percent is of the width; vertical percent is of the height,
+ *  so both edges are the same distance. */
+export function imageInsetPercents(size: PageSize): { x: number; y: number } {
+  const { w, h } = PAGE_INCHES[size];
+  return { x: IMAGE_INSET_PERCENT, y: (IMAGE_INSET_PERCENT * w) / h };
+}
+
+/** Cream page at the trim size with the picture contained on it. */
+export async function renderImagePageCanvas(
+  src: string,
+  imgW: number,
+  imgH: number,
+  pageSize: PageSize,
+  fit: ImageFit,
+  dpi = 140,
+): Promise<HTMLCanvasElement> {
+  const img = await loadImage(src);
+  const spec = PAGE_INCHES[pageSize];
+  const w = Math.max(1, Math.round(spec.w * dpi));
+  const h = Math.max(1, Math.round(spec.h * dpi));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not draw that image page.');
+  ctx.fillStyle = PAGE_PAPER;
+  ctx.fillRect(0, 0, w, h);
+  const natW = imgW > 0 ? imgW : img.naturalWidth;
+  const natH = imgH > 0 ? imgH : img.naturalHeight;
+  const place = imagePlacement(w, h, natW, natH, fit);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, place.x, place.y, place.w, place.h);
   return canvas;
 }
 
@@ -533,6 +784,34 @@ function placeTextPage(pdf: jsPDF, title: string, body: string) {
   }
 }
 
+function dataUrlFormat(dataUrl: string): 'PNG' | 'JPEG' {
+  return dataUrl.slice(0, 40).toLowerCase().includes('image/png') ? 'PNG' : 'JPEG';
+}
+
+/** Picture contained on the current PDF page. Same geometry as the PNG export. */
+function placeUploadedImage(pdf: jsPDF, page: ImagePage) {
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  pdf.setFillColor(PAGE_PAPER_RGB.r, PAGE_PAPER_RGB.g, PAGE_PAPER_RGB.b);
+  pdf.rect(0, 0, pw, ph, 'F');
+  const place = imagePlacement(pw, ph, page.width, page.height, page.fit);
+  pdf.addImage(
+    page.dataUrl,
+    dataUrlFormat(page.dataUrl),
+    place.x,
+    place.y,
+    place.w,
+    place.h,
+    undefined,
+    'MEDIUM',
+  );
+}
+
+function isLeadCover(pages: BookPage[]): boolean {
+  const first = pages[0];
+  return !!first && first.kind === 'image' && first.role === 'cover';
+}
+
 export async function exportBookPdf(
   pages: BookPage[],
   keyword: string,
@@ -551,52 +830,72 @@ export async function exportBookPdf(
   const name = titleCase(keyword);
   const CELL = 18;
   const mazeCount = pages.filter((p) => p.kind === 'maze').length;
-  const textCount = pages.length - mazeCount;
+  const textCount = pages.filter((p) => p.kind === 'text').length;
+  const imageCount = pages.filter((p) => p.kind === 'image').length;
+  // A cover image left on page 1 replaces the generated title page.
+  const leadCover = isLeadCover(pages);
 
   // Cover (jsPDF starts with one page already).
-  const coverTitle = Math.min(48, pw * 0.1);
-  const coverSub = Math.min(16, pw * 0.038);
-  pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(coverTitle);
-  pdf.text(`${name} Mazes`, pw / 2, ph * 0.42, { align: 'center' });
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(coverSub);
-  const coverBits: string[] = [];
-  if (mazeCount) coverBits.push(`${mazeCount} puzzle${mazeCount === 1 ? '' : 's'}`);
-  if (textCount) coverBits.push(`${textCount} text page${textCount === 1 ? '' : 's'}`);
-  if (mazeCount) {
-    coverBits.push(
-      `solutions ${mode === 'after-each' ? 'after each maze' : 'at the back'}`,
+  if (!leadCover) {
+    const coverTitle = Math.min(48, pw * 0.1);
+    const coverSub = Math.min(16, pw * 0.038);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(coverTitle);
+    pdf.text(`${name} Mazes`, pw / 2, ph * 0.42, { align: 'center' });
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(coverSub);
+    const coverBits: string[] = [];
+    if (mazeCount) coverBits.push(`${mazeCount} puzzle${mazeCount === 1 ? '' : 's'}`);
+    if (textCount) coverBits.push(`${textCount} text page${textCount === 1 ? '' : 's'}`);
+    if (imageCount) coverBits.push(`${imageCount} image page${imageCount === 1 ? '' : 's'}`);
+    if (mazeCount) {
+      coverBits.push(
+        `solutions ${mode === 'after-each' ? 'after each maze' : 'at the back'}`,
+      );
+    }
+    const subtitle = coverBits.join('  ·  ') || 'Maze book';
+    pdf.text(
+      asLines(pdf.splitTextToSize(subtitle, pw * 0.8)),
+      pw / 2,
+      ph * 0.42 + coverTitle * 0.9,
+      { align: 'center' },
     );
   }
-  const subtitle = coverBits.join('  ·  ') || 'Maze book';
-  pdf.text(
-    asLines(pdf.splitTextToSize(subtitle, pw * 0.8)),
-    pw / 2,
-    ph * 0.42 + coverTitle * 0.9,
-    { align: 'center' },
-  );
 
   // after-each counts one step per maze (the solution is part of that step).
-  // at-end counts maze pages and solution pages separately. Text pages always count.
-  const total = (mode === 'after-each' ? mazeCount : mazeCount * 2) + textCount;
+  // at-end counts maze pages and solution pages separately. Text and image pages count once.
+  const total =
+    (mode === 'after-each' ? mazeCount : mazeCount * 2) + textCount + imageCount;
   let done = 0;
   let step = 0;
 
   const fmt = PAGE_FORMATS[pageSize];
   const mazes: BookMaze[] = [];
+  let usedFirstPage = !leadCover;
+  const ensurePage = () => {
+    if (!usedFirstPage) {
+      usedFirstPage = true;
+      return;
+    }
+    pdf.addPage(fmt, 'portrait');
+  };
 
   for (const item of pages) {
     if (item.kind === 'text') {
-      pdf.addPage(fmt, 'portrait');
+      ensurePage();
       placeTextPage(pdf, item.title, item.body);
+      done++;
+      onProgress(done, total);
+    } else if (item.kind === 'image') {
+      ensurePage();
+      placeUploadedImage(pdf, item);
       done++;
       onProgress(done, total);
     } else {
       mazes.push(item.maze);
       const tag = `Maze ${mazes.length}`;
       const { maze, markers } = item.maze;
-      pdf.addPage(fmt, 'portrait');
+      ensurePage();
       placeImage(pdf, renderToCanvas(maze, CELL, false, markers), tag);
       if (mode === 'after-each') {
         pdf.addPage(fmt, 'portrait');
@@ -641,11 +940,14 @@ export async function exportBookZip(
   const mazeDir = zip.folder('mazes')!;
   const solDir = zip.folder('solutions')!;
   const textDir = zip.folder('text-pages')!;
+  const imageDir = zip.folder('image-pages')!;
   const pad = (n: number) => String(n).padStart(3, '0');
   const CELL = 22;
   const total = Math.max(1, pages.length);
   let mazeNo = 0;
   let textNo = 0;
+  let coverNo = 0;
+  let imageNo = 0;
 
   for (let i = 0; i < pages.length; i++) {
     const item = pages[i];
@@ -655,6 +957,25 @@ export async function exportBookZip(
         .toDataURL('image/png')
         .split(',')[1];
       textDir.file(`text-${pad(textNo)}.png`, png, { base64: true });
+    } else if (item.kind === 'image') {
+      const png = (
+        await renderImagePageCanvas(
+          item.dataUrl,
+          item.width,
+          item.height,
+          pageSize,
+          item.fit,
+        )
+      )
+        .toDataURL('image/png')
+        .split(',')[1];
+      if (item.role === 'cover') {
+        coverNo++;
+        imageDir.file(`cover-${pad(coverNo)}.png`, png, { base64: true });
+      } else {
+        imageNo++;
+        imageDir.file(`image-${pad(imageNo)}.png`, png, { base64: true });
+      }
     } else {
       mazeNo++;
       const { maze, markers } = item.maze;

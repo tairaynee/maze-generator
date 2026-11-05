@@ -298,6 +298,7 @@ canvas.overlay {
 }
 
 .text-tools {
+  position: relative;
   border-top: 1px solid var(--line);
   padding-top: 12px;
   display: flex;
@@ -411,6 +412,40 @@ button.danger:hover {
   text-align: center;
   color: #8a8175;
   font-size: 14px;
+}
+
+.page-frame.image-sheet {
+  background: #fbf7f0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.image-sheet-fit {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-sheet-fit img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .pager {
