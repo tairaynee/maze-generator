@@ -8,15 +8,20 @@ import {
   MARGIN_CELLS,
 } from './lib/render';
 import {
+  createImagePage,
   createTextPage,
   exportBookPdf,
   exportBookZip,
   generateBatch,
+  imageInsetPercents,
   pageAspectRatio,
   regenerateOne,
+  renderImagePageCanvas,
   renderTextPageCanvas,
   replaceMazeBatch,
+  IMAGE_INSET_PERCENT,
   type BookPage,
+  type ImageFit,
   type PageSize,
   type SolutionMode,
 } from './lib/book';
@@ -72,6 +77,9 @@ export default function App() {
   const mainRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const imagePlaceRef = useRef<'start' | 'after' | 'end'>('after');
 
   const current = pages[page] ?? null;
   const bookMaze = current?.kind === 'maze' ? current.maze : null;
@@ -91,8 +99,13 @@ export default function App() {
         mazeNo += 1;
         return `Maze ${mazeNo}`;
       }
-      const title = p.title.trim();
-      return title ? `Text — ${title.slice(0, 48)}` : 'Text page';
+      if (p.kind === 'text') {
+        const title = p.title.trim();
+        return title ? `Text — ${title.slice(0, 48)}` : 'Text page';
+      }
+      const name = p.name.trim();
+      const label = p.role === 'cover' ? 'Cover' : 'Image';
+      return name ? `${label} — ${name.slice(0, 48)}` : `${label} page`;
     });
   }, [pages]);
 
@@ -241,8 +254,8 @@ export default function App() {
     );
   };
 
-  const deleteCurrentText = () => {
-    if (busy || current?.kind !== 'text') return;
+  const deleteCurrentPage = () => {
+    if (busy || !current || current.kind === 'maze') return;
     const id = current.id;
     const idx = page;
     setPages((arr) => arr.filter((p) => p.id !== id));
@@ -253,6 +266,120 @@ export default function App() {
       return Math.min(landed, nextLen - 1);
     });
     resetTrace();
+  };
+
+  const updateCurrentImage = (patch: { fit?: ImageFit }) => {
+    if (current?.kind !== 'image') return;
+    const id = current.id;
+    setPages((arr) =>
+      arr.map((p) => (p.kind === 'image' && p.id === id ? { ...p, ...patch } : p)),
+    );
+  };
+
+  const useAsCover = () => {
+    if (busy || current?.kind !== 'image') return;
+    const id = current.id;
+    const keepFit = current.role === 'cover';
+    setPages((arr) => {
+      const idx = arr.findIndex((p) => p.id === id);
+      if (idx < 0) return arr;
+      const item = arr[idx];
+      if (item.kind !== 'image') return arr;
+      const cover: BookPage = {
+        ...item,
+        role: 'cover',
+        fit: keepFit ? item.fit : 'full',
+      };
+      const rest = arr
+        .filter((p) => p.id !== id)
+        .map((p) =>
+          p.kind === 'image' && p.role === 'cover' ? { ...p, role: 'image' as const } : p,
+        );
+      return [cover, ...rest];
+    });
+    setPage(0);
+    resetTrace();
+  };
+
+  const addImages = async (
+    files: File[],
+    where: 'cover' | 'start' | 'after' | 'end',
+  ) => {
+    if (busy || !files.length) return;
+    setError('');
+    const total = files.length;
+    setProgress({ label: 'Reading images', done: 0, total });
+    const created: BookPage[] = [];
+    const problems: string[] = [];
+    let wantCover = where === 'cover';
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+          created.push(await createImagePage(file, wantCover ? 'cover' : 'image'));
+          wantCover = false;
+        } catch (e) {
+          problems.push(
+            e instanceof Error ? e.message : `Could not read ${file.name || 'that image'}.`,
+          );
+        }
+        setProgress({ label: 'Reading images', done: i + 1, total });
+      }
+      if (!created.length) {
+        setError(problems[0] ?? 'Could not read that image.');
+        return;
+      }
+      if (problems.length) {
+        setWarning((w) => [w, problems.join(' ')].filter(Boolean).join(' '));
+      }
+      const insertAt =
+        where === 'cover' || where === 'start'
+          ? 0
+          : where === 'end'
+            ? pages.length
+            : Math.min(pages.length, Math.max(0, page + 1));
+      setPages((arr) => {
+        if (where === 'cover') {
+          const demoted = arr.map((p) =>
+            p.kind === 'image' && p.role === 'cover' ? { ...p, role: 'image' as const } : p,
+          );
+          return [...created, ...demoted];
+        }
+        if (where === 'start') return [...created, ...arr];
+        if (where === 'end') return [...arr, ...created];
+        const at = Math.min(arr.length, Math.max(0, page + 1));
+        return [...arr.slice(0, at), ...created, ...arr.slice(at)];
+      });
+      setPage(insertAt);
+      resetTrace();
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  const pickCover = () => {
+    if (busy) return;
+    coverInputRef.current?.click();
+  };
+
+  const pickImages = (where: 'start' | 'after' | 'end') => {
+    if (busy) return;
+    imagePlaceRef.current = where;
+    imageInputRef.current?.click();
+  };
+
+  const onCoverInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    const list = input.files ? Array.from(input.files) : [];
+    input.value = '';
+    if (list.length) void addImages(list, 'cover');
+  };
+
+  const onImageInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    const list = input.files ? Array.from(input.files) : [];
+    input.value = '';
+    if (list.length) void addImages(list, imagePlaceRef.current);
   };
 
   const movePage = (delta: -1 | 1) => {
@@ -382,31 +509,48 @@ export default function App() {
       if (kind === 'pdf')
         await exportBookPdf(pages, keyword, solMode, pageSize, cb);
       else await exportBookZip(pages, keyword, pageSize, cb);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed.');
     } finally {
       setProgress(null);
     }
   };
 
-  const downloadCurrentPng = () => {
+  const downloadCurrentPng = async () => {
     if (!current) return;
-    if (current.kind === 'text') {
+    try {
+      if (current.kind === 'text') {
+        download(
+          renderTextPageCanvas(current.title, current.body, pageSize).toDataURL('image/png'),
+          `${slug}-page-${page + 1}.png`,
+        );
+        return;
+      }
+      if (current.kind === 'image') {
+        const canvas = await renderImagePageCanvas(
+          current.dataUrl,
+          current.width,
+          current.height,
+          pageSize,
+          current.fit,
+        );
+        download(canvas.toDataURL('image/png'), `${slug}-page-${page + 1}.png`);
+        return;
+      }
+      if (!maze) return;
       download(
-        renderTextPageCanvas(current.title, current.body, pageSize).toDataURL('image/png'),
-        `${slug}-page-${page + 1}.png`,
+        renderToCanvas(
+          maze,
+          22,
+          showSolution,
+          markers,
+          `${pageLabels[page] ?? 'Maze'}${showSolution ? ' — Solution' : ''}`,
+        ).toDataURL('image/png'),
+        `${slug}-${page + 1}.png`,
       );
-      return;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not export this page.');
     }
-    if (!maze) return;
-    download(
-      renderToCanvas(
-        maze,
-        22,
-        showSolution,
-        markers,
-        `${pageLabels[page] ?? 'Maze'}${showSolution ? ' — Solution' : ''}`,
-      ).toDataURL('image/png'),
-      `${slug}-${page + 1}.png`,
-    );
   };
 
   const slug = keyword.trim().replace(/\s+/g, '-').toLowerCase() || 'maze';
@@ -417,14 +561,19 @@ export default function App() {
     (b) => b.markers.start || b.markers.end,
   ).length;
   const onMaze = current?.kind === 'maze';
+  const imageCount = pages.filter((p) => p.kind === 'image').length;
+  const imageInset =
+    current?.kind === 'image' && current.fit === 'inset'
+      ? imageInsetPercents(pageSize)
+      : null;
 
   return (
     <div className="app">
       <header>
         <h1>Theme Maze Book Generator</h1>
         <p className="sub">
-          One keyword → a whole book of mazes in that shape. Add text pages
-          for instructions or section titles, then export. Free AI art, no
+          One keyword → a whole book of mazes in that shape. Add a cover
+          image, picture pages, or text pages, then export. Free AI art, no
           sign-up.
         </p>
       </header>
@@ -501,6 +650,94 @@ export default function App() {
         </p>
 
         <div className="text-tools">
+          <h3>Cover & image pages</h3>
+          {current?.kind === 'image' && (
+            <div className="text-edit">
+              <p className="note">
+                Editing {pageLabels[page] ?? 'this image page'}. Move earlier
+                or later to change where it sits. Fit updates the preview,
+                the PDF, and the zip.
+              </p>
+              <label className="sel">
+                Fit
+                <select
+                  value={current.fit}
+                  onChange={(e) =>
+                    updateCurrentImage({ fit: e.target.value as ImageFit })
+                  }
+                  disabled={busy}
+                >
+                  <option value="full">Edge to edge</option>
+                  <option value="inset">
+                    With margin ({IMAGE_INSET_PERCENT}%)
+                  </option>
+                </select>
+              </label>
+              <div className="row">
+                {!(current.role === 'cover' && page === 0) && (
+                  <button onClick={useAsCover} disabled={busy}>
+                    Use as book cover
+                  </button>
+                )}
+                <button className="danger" onClick={deleteCurrentPage} disabled={busy}>
+                  Delete this image page
+                </button>
+              </div>
+            </div>
+          )}
+          <p className="note">
+            Upload a book cover or other pictures (PNG, JPEG, or WebP). Each
+            file is one page at the trim size you picked. The picture keeps
+            its shape: scaled to fit, never stretched or cropped. Edge to
+            edge fills the sheet — a cover already made for that size fills
+            the page, and other shapes get a cream letterbox. With margin
+            centers it inside a {IMAGE_INSET_PERCENT}% cream border, the same
+            paper as text pages.
+          </p>
+          <p className="note">
+            Add cover image places the picture first, edge to edge. While
+            that cover stays on page 1, the PDF starts with it and skips the
+            generated title page. Other image pages stay in book order after
+            that title page.
+          </p>
+          <div className="row">
+            <button onClick={pickCover} disabled={busy}>
+              Add cover image
+            </button>
+          </div>
+          <div className="row">
+            <button onClick={() => pickImages('start')} disabled={busy}>
+              Add images at start
+            </button>
+            <button onClick={() => pickImages('after')} disabled={busy}>
+              Add images after current
+            </button>
+            <button onClick={() => pickImages('end')} disabled={busy}>
+              Add images at end
+            </button>
+          </div>
+          <input
+            ref={coverInputRef}
+            className="file-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={onCoverInput}
+          />
+          <input
+            ref={imageInputRef}
+            className="file-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+            multiple
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={onImageInput}
+          />
+        </div>
+
+        <div className="text-tools">
           <h3>Text pages</h3>
           {current?.kind === 'text' && (
             <div className="text-edit">
@@ -529,7 +766,7 @@ export default function App() {
                 />
               </label>
               <div className="row">
-                <button className="danger" onClick={deleteCurrentText} disabled={busy}>
+                <button className="danger" onClick={deleteCurrentPage} disabled={busy}>
                   Delete this text page
                 </button>
               </div>
@@ -722,7 +959,11 @@ export default function App() {
           <div className="stage">
             <div
               className={
-                current.kind === 'text' ? 'page-frame text-sheet' : 'page-frame'
+                current.kind === 'text'
+                  ? 'page-frame text-sheet'
+                  : current.kind === 'image'
+                    ? 'page-frame image-sheet'
+                    : 'page-frame'
               }
               style={{ aspectRatio: pageAspectRatio(pageSize) }}
             >
@@ -752,6 +993,22 @@ export default function App() {
                     </div>
                   </div>
                 </>
+              ) : current.kind === 'image' ? (
+                <div
+                  className="image-sheet-fit"
+                  style={
+                    imageInset
+                      ? {
+                          left: `${imageInset.x}%`,
+                          right: `${imageInset.x}%`,
+                          top: `${imageInset.y}%`,
+                          bottom: `${imageInset.y}%`,
+                        }
+                      : undefined
+                  }
+                >
+                  <img src={current.dataUrl} alt={current.name} />
+                </div>
               ) : (
                 <div className="text-sheet-inner">
                   {current.title.trim() ? (
@@ -772,6 +1029,23 @@ export default function App() {
           <div className={'status' + (solved && onMaze ? ' win' : '')}>
             {current.kind === 'text' ? (
               <>Text page · included in the PDF and the PNG zip.</>
+            ) : current.kind === 'image' ? (
+              current.role === 'cover' && page === 0 ? (
+                <>
+                  Cover · page 1 of the PDF. The generated title page is
+                  skipped. Included in the PNG zip as image-pages/cover-001.png.
+                </>
+              ) : current.role === 'cover' ? (
+                <>
+                  Cover image · move it to page 1 and it replaces the
+                  generated PDF title page.
+                </>
+              ) : (
+                <>
+                  Image page · scaled to fit this trim size. Included in the
+                  PDF and the PNG zip.
+                </>
+              )
             ) : solved ? (
               <strong>Solved! 🎉</strong>
             ) : (
@@ -779,6 +1053,12 @@ export default function App() {
             )}
             <span className="src">
               {pages.length} page{pages.length === 1 ? '' : 's'}
+              {imageCount > 0 && (
+                <>
+                  {' '}
+                  · {imageCount} image{imageCount === 1 ? '' : 's'}
+                </>
+              )}
               {mazes.length > 0 && (
                 <>
                   {' '}
@@ -796,7 +1076,7 @@ export default function App() {
         <div className="stage hint">
           <p>
             Pick a theme word and a count, then “Generate book”. Or add a
-            text page first — it stays in front of the mazes.
+            cover image or a text page first — it stays in front of the mazes.
           </p>
         </div>
       )}
