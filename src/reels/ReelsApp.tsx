@@ -432,7 +432,7 @@ export default function ReelsApp() {
                 className={paletteName === AUTO_BACKGROUND ? 'on' : ''}
                 style={{
                   background:
-                    'conic-gradient(#1d4bff, #ff2f92, #ffe500, #14d46a, #6d28ff, #00c2ff, #1d4bff)',
+                    'conic-gradient(#E7A090, #C98B98, #F0C4A4, #3E8F8A, #B7C0E4, #3E5EA8, #8E5A82, #D4B15C, #C46A4C, #9FCBE0, #8A3850, #E7A090)',
                   color: '#ffffff',
                 }}
                 aria-pressed={paletteName === AUTO_BACKGROUND}

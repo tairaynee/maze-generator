@@ -42,9 +42,9 @@ const FONT = '"Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif';
 export function drawSplash(ctx: CanvasRenderingContext2D): void {
   const { width, height } = ctx.canvas;
   const g = ctx.createLinearGradient(0, 0, width, height);
-  g.addColorStop(0, '#1d4bff');
-  g.addColorStop(0.5, '#6d28ff');
-  g.addColorStop(1, '#ff2f92');
+  g.addColorStop(0, '#3E5EA8');
+  g.addColorStop(0.55, '#734868');
+  g.addColorStop(1, '#8A3850');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
   ctx.textAlign = 'center';
@@ -84,7 +84,8 @@ export function drawFrame(
 
   drawBackground(ctx, palette, width, height, t);
 
-  const layout = mazeLayout(scene.maze, width, height, look.countdown);
+  const band = captionBand(look);
+  const layout = mazeLayout(scene.maze, width, height, look.countdown, band);
   const track = buildColoredTrack(scene.maze, scene.route, layout.cell, MARKER_COLORS);
   const points = track.points.map((p) => ({ x: p.x + layout.mx, y: p.y + layout.my }));
   const placed = placeTrack(points, track.spans);
@@ -127,13 +128,13 @@ export function drawFrame(
   }
   drawBead(ctx, head.x, head.y, layout.cell, colorAt(placed, dist), walkT > 0 && walkT < 1, t);
   ctx.restore();
-  drawGateLabels(ctx, scene, layout);
+  drawGateLabels(ctx, scene, layout, height - band - 16);
 
   if (t < timeline.hookEnd) {
     const fade =
       t < timeline.hookEnd - 0.22 ? 1 : 1 - (t - (timeline.hookEnd - 0.22)) / 0.22;
-    const rise = (1 - easeOutCubic(clamp01(t / 0.35))) * 18;
-    drawHook(ctx, width / 2, 168 + rise, fade, palette);
+    const rise = (1 - easeOutCubic(clamp01(t / 0.35))) * 14;
+    drawHook(ctx, width / 2, 188 + rise, fade, palette);
   }
 
   if (look.countdown && t >= timeline.hookEnd && t < timeline.countEnd) {
@@ -156,9 +157,20 @@ interface Layout {
   mh: number;
 }
 
-function mazeLayout(maze: Maze, width: number, height: number, countdown: boolean): Layout {
-  const top = countdown ? 470 : 300;
-  const bottom = height - 210;
+function captionBand(look: ReelLook): number {
+  if (!look.endCard) return 180;
+  return look.cover ? 800 : 500;
+}
+
+function mazeLayout(
+  maze: Maze,
+  width: number,
+  height: number,
+  countdown: boolean,
+  band: number,
+): Layout {
+  const top = countdown ? 540 : 420;
+  const bottom = height - band;
   const side = 48;
   const spanC = maze.bbox.maxC - maze.bbox.minC + 1 + REEL_MARGIN * 2;
   const spanR = maze.bbox.maxR - maze.bbox.minR + 1 + REEL_MARGIN * 2;
@@ -379,13 +391,14 @@ function drawGateLabels(
   ctx: CanvasRenderingContext2D,
   scene: ReelScene,
   layout: Layout,
+  maxY: number,
 ): void {
   const { maze, palette } = scene;
   const { cell, mx, my } = layout;
   const start = gateScreen(maze, maze.start, maze.startOpen, cell, mx, my);
   const goal = gateScreen(maze, maze.end, maze.endOpen, cell, mx, my);
-  drawTag(ctx, 'Start', nudge(start, maze.startOpen, cell * 1.35), palette.text, ctx.canvas);
-  drawTag(ctx, 'Goal', nudge(goal, maze.endOpen, cell * 1.55), palette.text, ctx.canvas);
+  drawTag(ctx, 'Start', nudge(start, maze.startOpen, cell * 1.35), palette.text, ctx.canvas, maxY);
+  drawTag(ctx, 'Goal', nudge(goal, maze.endOpen, cell * 1.55), palette.text, ctx.canvas, maxY);
 }
 
 function gateScreen(
@@ -448,13 +461,14 @@ function drawTag(
   at: TrackPoint,
   color: string,
   canvas: HTMLCanvasElement,
+  maxY: number,
 ): void {
   ctx.save();
   ctx.font = `600 26px ${FONT}`;
-  track(ctx, '0.04em');
+  track(ctx, '0.02em');
   const w = ctx.measureText(text).width;
-  const x = Math.min(canvas.width - w / 2 - 20, Math.max(w / 2 + 20, at.x));
-  const y = Math.min(canvas.height - 28, Math.max(28, at.y));
+  const x = Math.min(canvas.width - w / 2 - 28, Math.max(w / 2 + 28, at.x));
+  const y = Math.min(maxY, Math.max(36, at.y));
   ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -538,9 +552,9 @@ function drawHook(
   ctx.textBaseline = 'middle';
   ctx.fillStyle = palette.text;
   ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.28)';
-  ctx.shadowBlur = 18;
-  track(ctx, '-0.045em');
-  ctx.font = `640 86px ${FONT}`;
+  ctx.shadowBlur = 16;
+  track(ctx, '-0.03em');
+  ctx.font = `620 68px ${FONT}`;
   lines.forEach((line, i) => {
     ctx.fillText(line, x, y + i * 92);
   });
@@ -599,63 +613,81 @@ function drawEndCard(
 ): void {
   const cta = look.cta.trim() || 'Follow for a new maze every day';
   const cover = look.cover && look.cover.complete && look.cover.naturalWidth > 0 ? look.cover : null;
-  ctx.save();
-  ctx.font = `640 72px ${FONT}`;
-  track(ctx, '-0.04em');
-  const lines = wrapLines(ctx, cta, 880);
-  const textH = lines.length * 78;
+  const band = captionBand(look);
+  const bandTop = height - band;
+  const side = 96;
+  const maxW = width - side * 2;
   const handle = look.handle.trim();
-  const handleH = handle ? 52 : 0;
-  const imgH = cover ? 520 : 0;
-  const blockH = imgH + (cover ? 36 : 0) + textH + handleH;
-  const y = Math.max(640, height - blockH - 160);
-  const rise = (1 - easeOutCubic(p)) * 36;
+  const imgH = cover ? 300 : 0;
+  const bottomPad = 96;
+  const topPad = cover ? 36 : 72;
+  const textMax = band - topPad - bottomPad - imgH - (cover ? 28 : 0) - (handle ? 64 : 0);
+  const fitted = fitCaption(ctx, cta, maxW, Math.max(80, textMax));
+  const textH = fitted.lines.length * fitted.lineH;
+  const blockH = imgH + (cover ? 28 : 0) + textH + (handle ? 64 : 0);
+  const y = bandTop + Math.max(topPad, (band - bottomPad - blockH) / 2);
+  const rise = (1 - easeOutCubic(p)) * 20;
 
-  const scrim = ctx.createLinearGradient(0, y - 180, 0, height);
-  scrim.addColorStop(0, 'rgba(0,0,0,0)');
-  scrim.addColorStop(1, isLight(palette) ? `rgba(255,255,255,${0.28 * p})` : `rgba(0,0,0,${0.28 * p})`);
-  ctx.fillStyle = scrim;
-  ctx.fillRect(0, Math.max(0, y - 180), width, height - Math.max(0, y - 180));
-
+  ctx.save();
   ctx.globalAlpha = p;
   ctx.translate(0, rise);
   let cursor = y;
   if (cover) {
-    const boxW = 640;
-    const boxH = imgH;
+    const boxW = Math.min(560, maxW);
     const boxX = (width - boxW) / 2;
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.28)';
-    ctx.shadowBlur = 36;
-    ctx.shadowOffsetY = 16;
-    roundRect(ctx, boxX, cursor, boxW, boxH, 36);
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.shadowColor = 'rgba(0,0,0,0.22)';
+    ctx.shadowBlur = 28;
+    ctx.shadowOffsetY = 12;
+    roundRect(ctx, boxX, cursor, boxW, imgH, 28);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
     ctx.fill();
     ctx.shadowColor = 'transparent';
     ctx.clip();
-    const scaleFit = Math.min(boxW / cover.naturalWidth, boxH / cover.naturalHeight);
+    const scaleFit = Math.min(boxW / cover.naturalWidth, imgH / cover.naturalHeight);
     const dw = cover.naturalWidth * scaleFit;
     const dh = cover.naturalHeight * scaleFit;
-    ctx.drawImage(cover, boxX + (boxW - dw) / 2, cursor + (boxH - dh) / 2, dw, dh);
+    ctx.drawImage(cover, boxX + (boxW - dw) / 2, cursor + (imgH - dh) / 2, dw, dh);
     ctx.restore();
-    cursor += boxH + 36;
+    cursor += imgH + 28;
   }
 
   ctx.fillStyle = palette.text;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.3)';
-  ctx.shadowBlur = 16;
-  for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], width / 2, cursor + 36 + i * 78);
+  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.22)';
+  ctx.shadowBlur = 12;
+  track(ctx, '-0.02em');
+  ctx.font = `600 ${fitted.size}px ${FONT}`;
+  for (let i = 0; i < fitted.lines.length; i++) {
+    ctx.fillText(fitted.lines[i], width / 2, cursor + fitted.lineH * 0.5 + i * fitted.lineH);
   }
   if (handle) {
-    track(ctx, '0.08em');
-    ctx.font = `560 28px ${FONT}`;
-    ctx.globalAlpha = p * 0.82;
-    ctx.fillText(handle, width / 2, cursor + textH + 28);
+    track(ctx, '0.06em');
+    ctx.font = `560 26px ${FONT}`;
+    ctx.globalAlpha = p * 0.8;
+    ctx.fillText(handle, width / 2, cursor + textH + 40);
   }
   ctx.restore();
+}
+
+function fitCaption(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxHeight: number,
+): { size: number; lines: string[]; lineH: number } {
+  let size = 54;
+  let lines = [text];
+  let lineH = Math.round(size * 1.42);
+  for (; size >= 36; size -= 2) {
+    ctx.font = `600 ${size}px ${FONT}`;
+    track(ctx, '-0.02em');
+    lines = wrapLines(ctx, text, maxWidth);
+    lineH = Math.round(size * 1.42);
+    if (lines.length * lineH <= maxHeight) break;
+  }
+  return { size, lines, lineH };
 }
 
 function drawBackground(

@@ -229,7 +229,7 @@ function runBackgrounds(): void {
   check(pinned.backgrounds[0].name === PALETTES[3].name, 'batch did not start from the picked color');
   check(new Set(pinned.backgrounds.map((p) => p.name)).size === 8, 'pinned batch repeats');
   const locked = takeBackgrounds(empty, 1, PALETTES[1], 3);
-  check(locked.backgrounds.length === 1 && locked.backgrounds[0].name === 'Magenta', 'locked single');
+  check(locked.backgrounds.length === 1 && locked.backgrounds[0].name === PALETTES[1].name, 'locked single');
   const names = new Set(PALETTES.map((p) => p.name));
   check(names.size === PALETTES.length, 'palette names are not unique');
   check(PALETTES.length >= 8, 'not enough backgrounds for a batch of 8');

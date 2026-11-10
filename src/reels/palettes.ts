@@ -1,6 +1,6 @@
-// Saturated fields for an Instagram grid. Each name is a different hue,
-// not a tint of the same beige. The marker colors on the solution stay
-// separate from these backgrounds.
+// Distinct fields for an Instagram grid. Hues stay saturated, but they
+// sit below fluorescent: coral, rose, apricot, teal, and so on.
+// Marker colors on the solution are separate and a step softer than neon.
 
 export interface Palette {
   name: string;
@@ -14,27 +14,29 @@ export interface Palette {
 export const AUTO_BACKGROUND = 'auto';
 
 export const MARKER_COLORS = [
-  '#FF2D2D',
-  '#FFE14A',
-  '#22E06A',
-  '#3D7BFF',
-  '#FF3EC8',
-  '#FF8A00',
+  '#E23B3B',
+  '#E6B423',
+  '#2EAA62',
+  '#3A6ED4',
+  '#D45398',
+  '#E07A28',
 ] as const;
 
+const INK = '#241C18';
+
 export const PALETTES: Palette[] = [
-  { name: 'Blue', bg: '#1d4bff', bgMid: '#3d6bff', bgEnd: '#6d28d9', wall: '#14151c', text: '#ffffff' },
-  { name: 'Magenta', bg: '#ff2f92', bgMid: '#ff4db0', bgEnd: '#c026d3', wall: '#14151c', text: '#ffffff' },
-  { name: 'Lime', bg: '#d6ff3c', bgMid: '#b6f562', bgEnd: '#3ddc6a', wall: '#14151c', text: '#14151c' },
-  { name: 'Orange', bg: '#ff5a1f', bgMid: '#ff7a33', bgEnd: '#ffb000', wall: '#14151c', text: '#14151c' },
-  { name: 'Violet', bg: '#6d28ff', bgMid: '#8b5cf6', bgEnd: '#e879f9', wall: '#14151c', text: '#ffffff' },
-  { name: 'Teal', bg: '#00c2b8', bgMid: '#14b8a6', bgEnd: '#0e7490', wall: '#14151c', text: '#ffffff' },
-  { name: 'Red', bg: '#ff2a2a', bgMid: '#ff4d4d', bgEnd: '#ff6b3d', wall: '#14151c', text: '#ffffff' },
-  { name: 'Yellow', bg: '#ffe500', bgMid: '#ffd000', bgEnd: '#ff9f1c', wall: '#14151c', text: '#14151c' },
-  { name: 'Cyan', bg: '#00c2ff', bgMid: '#38bdf8', bgEnd: '#2563eb', wall: '#14151c', text: '#ffffff' },
-  { name: 'Pink', bg: '#ff4d8d', bgMid: '#fb7185', bgEnd: '#e11d48', wall: '#14151c', text: '#ffffff' },
-  { name: 'Green', bg: '#14d46a', bgMid: '#22c55e', bgEnd: '#047857', wall: '#14151c', text: '#ffffff' },
-  { name: 'Indigo', bg: '#312e81', bgMid: '#4338ca', bgEnd: '#7c3aed', wall: '#14151c', text: '#ffffff' },
+  { name: 'Coral', bg: '#E7A090', bgMid: '#D98978', bgEnd: '#C46E68', wall: INK, text: INK },
+  { name: 'Rose', bg: '#C98B98', bgMid: '#B87384', bgEnd: '#96586A', wall: INK, text: '#FFFFFF' },
+  { name: 'Apricot', bg: '#F0C4A4', bgMid: '#E4AA80', bgEnd: '#D08A5C', wall: INK, text: INK },
+  { name: 'Teal', bg: '#3E8F8A', bgMid: '#2C736F', bgEnd: '#1C5552', wall: INK, text: '#FFFFFF' },
+  { name: 'Periwinkle', bg: '#B7C0E4', bgMid: '#9AA6D4', bgEnd: '#7C8AB8', wall: INK, text: INK },
+  { name: 'Sage', bg: '#B4C2A6', bgMid: '#96A888', bgEnd: '#738468', wall: INK, text: INK },
+  { name: 'Cobalt', bg: '#3E5EA8', bgMid: '#2E4C90', bgEnd: '#1E366C', wall: INK, text: '#FFFFFF' },
+  { name: 'Plum', bg: '#8E5A82', bgMid: '#734868', bgEnd: '#54344C', wall: INK, text: '#FFFFFF' },
+  { name: 'Mustard', bg: '#D4B15C', bgMid: '#C09A44', bgEnd: '#A07C30', wall: INK, text: INK },
+  { name: 'Terracotta', bg: '#C46A4C', bgMid: '#A8563C', bgEnd: '#8A4030', wall: INK, text: '#FFFFFF' },
+  { name: 'Sky', bg: '#9FCBE0', bgMid: '#7EB4D0', bgEnd: '#5A96B4', wall: INK, text: INK },
+  { name: 'Merlot', bg: '#8A3850', bgMid: '#6C283C', bgEnd: '#4C1828', wall: INK, text: '#FFFFFF' },
 ];
 
 export function paletteByName(name: string): Palette {
