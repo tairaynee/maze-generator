@@ -206,10 +206,11 @@ function placeTrack(points: TrackPoint[], spans: RouteSpan[]): Placed {
 }
 
 function walkProgress(t: number, timeline: Timeline): number {
-  if (t <= timeline.countEnd) return 0;
+  if (t <= timeline.holdEnd) return 0;
   if (t >= timeline.walkEnd) return 1;
-  const span = timeline.walkEnd - timeline.countEnd;
-  return easeMarker((t - timeline.countEnd) / span);
+  const span = timeline.walkEnd - timeline.holdEnd;
+  if (span <= 0) return 1;
+  return easeMarker((t - timeline.holdEnd) / span);
 }
 
 function layerCache(
@@ -351,10 +352,10 @@ export function reelEvents(scene: ReelScene, look: ReelLook): ReelEvents {
     : [];
   const colorChanges: number[] = [];
   let prev = -1;
-  const span = Math.max(0.05, timeline.walkEnd - timeline.countEnd);
+  const span = Math.max(0.05, timeline.walkEnd - timeline.holdEnd);
   const steps = Math.ceil(span * 40);
   for (let i = 0; i <= steps; i++) {
-    const time = timeline.countEnd + (span * i) / steps;
+    const time = timeline.holdEnd + (span * i) / steps;
     const dist = walkProgress(time, timeline) * placed.total;
     let idx = placed.spans.length - 1;
     for (let s = 0; s < placed.spans.length; s++) {

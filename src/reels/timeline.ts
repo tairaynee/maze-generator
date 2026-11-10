@@ -4,39 +4,67 @@ export interface Timeline {
   hookEnd: number;
   /** Countdown, when enabled, occupies (hookEnd, countEnd). */
   countEnd: number;
+  /** Unsolved maze. The solution walk starts at this time. */
+  holdEnd: number;
   /** Solution coloring finishes here. */
   walkEnd: number;
   /** Glow / burst finishes here. End card, if any, runs until duration. */
   burstEnd: number;
 }
 
-/** Fixed hook in the first second. The rest of the length is mostly the coloring. */
+export const REEL_MIN_SEC = 20;
+export const REEL_MAX_SEC = 30;
+/** How long each of 3, 2, and 1 stays on screen. */
+export const COUNT_BEAT_SEC = 1;
+/**
+ * Pause after the countdown, before any of the official path is drawn.
+ * Long enough for a person to try the maze.
+ */
+export const PLAY_ALONG_SEC = 7;
+
+/**
+ * Hook, then a one-second-per-beat countdown, then a fixed play-along hold,
+ * then the solution. The hold is never trimmed to make the reel shorter.
+ */
 export function buildTimeline(
   durationSec: number,
   countdown: boolean,
   endCard: boolean,
 ): Timeline {
-  const duration = Math.min(20, Math.max(10, durationSec));
+  let duration = Math.min(REEL_MAX_SEC, Math.max(REEL_MIN_SEC, durationSec));
   const hookEnd = 1;
-  let countSpan = countdown ? 1.35 : 0;
+  const countSpan = countdown ? COUNT_BEAT_SEC * 3 : 0;
+  const holdSpan = PLAY_ALONG_SEC;
   const burstSpan = 1.05;
   const minWalk = 4.2;
   let cardSpan = endCard ? Math.min(2.8, duration * 0.22) : 0;
-  let walkSpan = duration - hookEnd - countSpan - burstSpan - cardSpan;
+  let walkSpan = duration - hookEnd - countSpan - holdSpan - burstSpan - cardSpan;
   if (walkSpan < minWalk) {
     const cardCut = Math.min(cardSpan, minWalk - walkSpan);
     cardSpan -= cardCut;
     walkSpan += cardCut;
   }
-  if (walkSpan < minWalk && countSpan > 0.75) {
-    const countCut = Math.min(countSpan - 0.75, minWalk - walkSpan);
-    countSpan -= countCut;
-    walkSpan += countCut;
+  if (walkSpan < minWalk) {
+    duration += minWalk - walkSpan;
   }
   const countEnd = hookEnd + countSpan;
+  const holdEnd = countEnd + holdSpan;
   const burstEnd = duration - cardSpan;
   const walkEnd = burstEnd - burstSpan;
-  return { duration, hookEnd, countEnd, walkEnd, burstEnd };
+  return { duration, hookEnd, countEnd, holdEnd, walkEnd, burstEnd };
+}
+
+/** Studio status for the frame at `t`. Not drawn into the video. */
+export function reelPhase(t: number, timeline: Timeline, countdown: boolean): string {
+  if (t < timeline.hookEnd) return 'Hook';
+  if (countdown && t < timeline.countEnd) return 'Countdown';
+  if (t < timeline.holdEnd) {
+    const left = Math.max(1, Math.ceil(timeline.holdEnd - t - 1e-4));
+    return `Play along · ${left}s`;
+  }
+  if (t < timeline.walkEnd) return 'Solution';
+  if (t < timeline.burstEnd) return 'Finish';
+  return 'End card';
 }
 
 export function clamp01(t: number): number {
