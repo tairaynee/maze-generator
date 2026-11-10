@@ -90,51 +90,53 @@ export function drawFrame(
   const points = track.points.map((p) => ({ x: p.x + layout.mx, y: p.y + layout.my }));
   const placed = placeTrack(points, track.spans);
 
-  const pop = t < 0.4 ? 0.97 + 0.03 * easeOutCubic(clamp01(t / 0.35)) : 1;
+  const walkT = walkProgress(t, timeline);
+  const dist = walkT * placed.total;
+  const intro = t < 0.45 ? 0.96 + 0.04 * easeOutBack(clamp01(t / 0.4)) : 1;
+  const push = 1 + 0.055 * walkT;
+  const burstP =
+    t >= timeline.walkEnd
+      ? clamp01((t - timeline.walkEnd) / (timeline.burstEnd - timeline.walkEnd))
+      : 0;
+  const punch = burstP > 0 && burstP < 0.45 ? 1 + 0.04 * Math.sin((burstP / 0.45) * Math.PI) : 1;
+  const cam = intro * push * punch;
+  const cx = layout.mx + layout.mw / 2;
+  const cy = layout.my + layout.mh / 2;
   ctx.save();
-  if (pop !== 1) {
-    const cx = layout.mx + layout.mw / 2;
-    const cy = layout.my + layout.mh / 2;
-    ctx.translate(cx, cy);
-    ctx.scale(pop, pop);
-    ctx.translate(-cx, -cy);
-  }
+  ctx.translate(cx, cy);
+  ctx.scale(cam, cam);
+  ctx.translate(-cx, -cy);
 
   const layers = layerCache(scene, look, layout, width, height);
   ctx.drawImage(layers.floor, 0, 0);
-
-  const walkT = walkProgress(t, timeline);
-  const dist = walkT * placed.total;
   strokeVivid(ctx, placed, dist, Math.max(8, layout.cell * 0.58));
-
   ctx.drawImage(layers.walls, 0, 0);
   drawGates(ctx, scene, layout, t);
-  ctx.restore();
-
-  if (t >= timeline.walkEnd) {
-    const burst = clamp01((t - timeline.walkEnd) / (timeline.burstEnd - timeline.walkEnd));
-    drawBurst(ctx, placed, layout.cell, burst, scene.seed);
-  }
 
   const head =
     walkT > 0 || t >= timeline.countEnd ? pointAlong(placed, dist) : placed.points[0];
-  ctx.save();
-  if (pop !== 1) {
-    const cx = layout.mx + layout.mw / 2;
-    const cy = layout.my + layout.mh / 2;
-    ctx.translate(cx, cy);
-    ctx.scale(pop, pop);
-    ctx.translate(-cx, -cy);
+  const ahead = pointAlong(placed, Math.min(placed.total, dist + layout.cell * 0.8));
+  const heading = Math.atan2(ahead.y - head.y, ahead.x - head.x);
+  const fresh = spanFreshness(placed, dist);
+  if (fresh > 0.02 && walkT > 0 && walkT < 1) {
+    ctx.beginPath();
+    ctx.strokeStyle = withAlpha(colorAt(placed, dist), 0.55 * fresh);
+    ctx.lineWidth = Math.max(3, layout.cell * 0.12);
+    ctx.arc(head.x, head.y, layout.cell * (0.55 + (1 - fresh) * 1.1), 0, Math.PI * 2);
+    ctx.stroke();
   }
-  drawBead(ctx, head.x, head.y, layout.cell, colorAt(placed, dist), walkT > 0 && walkT < 1, t);
+  drawLead(ctx, head.x, head.y, heading, layout.cell, colorAt(placed, dist), walkT > 0 && walkT < 1, t);
+  if (burstP > 0) drawBurst(ctx, placed, layout.cell, burstP, scene.seed);
   ctx.restore();
-  drawGateLabels(ctx, scene, layout, height - band - 16);
+
+  const labelMinY = look.countdown ? 470 : 340;
+  drawGateLabels(ctx, scene, layout, labelMinY, height - band - 24);
 
   if (t < timeline.hookEnd) {
     const fade =
       t < timeline.hookEnd - 0.22 ? 1 : 1 - (t - (timeline.hookEnd - 0.22)) / 0.22;
-    const rise = (1 - easeOutCubic(clamp01(t / 0.35))) * 14;
-    drawHook(ctx, width / 2, 188 + rise, fade, palette);
+    const popIn = 0.94 + 0.06 * easeOutBack(clamp01(t / 0.38));
+    drawHook(ctx, width / 2, 176, fade, popIn, palette);
   }
 
   if (look.countdown && t >= timeline.hookEnd && t < timeline.countEnd) {
@@ -316,6 +318,59 @@ function colorAt(placed: Placed, dist: number): string {
   return placed.spans[placed.spans.length - 1]?.color ?? MARKER_COLORS[0];
 }
 
+function spanFreshness(placed: Placed, dist: number): number {
+  for (const span of placed.spans) {
+    const start = placed.cum[span.from] ?? 0;
+    const end = placed.cum[span.to] ?? start;
+    if (dist <= end) {
+      const len = Math.max(1, end - start);
+      const u = (dist - start) / len;
+      return u < 0.16 ? 1 - u / 0.16 : 0;
+    }
+  }
+  return 0;
+}
+
+export interface ReelEvents {
+  hook: number;
+  countdown: number[];
+  colorChanges: number[];
+  finish: number;
+}
+
+/** Times, in seconds, for the soundtrack hits. Matches the drawn timeline. */
+export function reelEvents(scene: ReelScene, look: ReelLook): ReelEvents {
+  const timeline = buildTimeline(look.duration, look.countdown, look.endCard);
+  const layout = mazeLayout(scene.maze, REEL_W, REEL_H, look.countdown, captionBand(look));
+  const built = buildColoredTrack(scene.maze, scene.route, layout.cell, MARKER_COLORS);
+  const placed = placeTrack(built.points, built.spans);
+  const countdown = look.countdown
+    ? [0, 1, 2].map(
+        (i) => timeline.hookEnd + ((timeline.countEnd - timeline.hookEnd) / 3) * i,
+      )
+    : [];
+  const colorChanges: number[] = [];
+  let prev = -1;
+  const span = Math.max(0.05, timeline.walkEnd - timeline.countEnd);
+  const steps = Math.ceil(span * 40);
+  for (let i = 0; i <= steps; i++) {
+    const time = timeline.countEnd + (span * i) / steps;
+    const dist = walkProgress(time, timeline) * placed.total;
+    let idx = placed.spans.length - 1;
+    for (let s = 0; s < placed.spans.length; s++) {
+      if (dist <= (placed.cum[placed.spans[s].to] ?? 0)) {
+        idx = s;
+        break;
+      }
+    }
+    if (idx !== prev) {
+      if (prev >= 0) colorChanges.push(time);
+      prev = idx;
+    }
+  }
+  return { hook: 0.12, countdown, colorChanges, finish: timeline.walkEnd };
+}
+
 function strokeSub(
   ctx: CanvasRenderingContext2D,
   points: TrackPoint[],
@@ -391,14 +446,40 @@ function drawGateLabels(
   ctx: CanvasRenderingContext2D,
   scene: ReelScene,
   layout: Layout,
+  minY: number,
   maxY: number,
 ): void {
   const { maze, palette } = scene;
   const { cell, mx, my } = layout;
   const start = gateScreen(maze, maze.start, maze.startOpen, cell, mx, my);
   const goal = gateScreen(maze, maze.end, maze.endOpen, cell, mx, my);
-  drawTag(ctx, 'Start', nudge(start, maze.startOpen, cell * 1.35), palette.text, ctx.canvas, maxY);
-  drawTag(ctx, 'Goal', nudge(goal, maze.endOpen, cell * 1.55), palette.text, ctx.canvas, maxY);
+  const mazeBox = { x: mx - 10, y: my - 10, w: layout.mw + 20, h: layout.mh + 20 };
+  ctx.save();
+  ctx.font = `600 26px ${FONT}`;
+  const startAt = placeClearLabel(
+    start,
+    maze.startOpen,
+    ctx.measureText('Start').width,
+    32,
+    ctx.canvas.width,
+    minY,
+    maxY,
+    [mazeBox],
+  );
+  const startBox = textBox(startAt, ctx.measureText('Start').width, 32);
+  const goalAt = placeClearLabel(
+    goal,
+    maze.endOpen,
+    ctx.measureText('Goal').width,
+    32,
+    ctx.canvas.width,
+    minY,
+    maxY,
+    [mazeBox, startBox],
+  );
+  ctx.restore();
+  drawTag(ctx, 'Start', startAt, palette.text);
+  drawTag(ctx, 'Goal', goalAt, palette.text);
 }
 
 function gateScreen(
@@ -455,57 +536,123 @@ function drawRing(
   ctx.fill();
 }
 
-function drawTag(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  at: TrackPoint,
-  color: string,
-  canvas: HTMLCanvasElement,
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function textBox(at: TrackPoint, textW: number, textH: number): Box {
+  const pad = 8;
+  return {
+    x: at.x - textW / 2 - pad,
+    y: at.y - textH / 2 - pad,
+    w: textW + pad * 2,
+    h: textH + pad * 2,
+  };
+}
+
+function boxesOverlap(a: Box, b: Box): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+/** Puts a label in open space outside the maze, never on the walls or another label. */
+function placeClearLabel(
+  anchor: TrackPoint,
+  openDir: number,
+  textW: number,
+  textH: number,
+  canvasW: number,
+  minY: number,
   maxY: number,
-): void {
+  blocked: Box[],
+): TrackPoint {
+  const dirs =
+    openDir >= 0
+      ? [openDir, (openDir + 1) % 4, (openDir + 3) % 4, (openDir + 2) % 4]
+      : [0, 1, 2, 3];
+  for (const dist of [78, 118, 164, 214]) {
+    for (const d of dirs) {
+      const at = nudge(anchor, d, dist);
+      const box = textBox(at, textW, textH);
+      if (box.x < 18 || box.y < minY || box.x + box.w > canvasW - 18 || box.y + box.h > maxY) {
+        continue;
+      }
+      if (blocked.some((b) => boxesOverlap(box, b))) continue;
+      return at;
+    }
+  }
+  const maze = blocked[0];
+  const y = Math.min(maxY - textH / 2 - 4, Math.max(minY + textH / 2 + 4, (maze?.y ?? minY) - textH / 2 - 14));
+  const left = maze ? maze.x - textW / 2 - 16 : 40;
+  const right = maze ? maze.x + maze.w + textW / 2 + 16 : canvasW - 40;
+  const x = left >= textW / 2 + 18 ? left : Math.min(canvasW - textW / 2 - 18, right);
+  return { x, y };
+}
+
+function drawTag(ctx: CanvasRenderingContext2D, text: string, at: TrackPoint, color: string): void {
   ctx.save();
   ctx.font = `600 26px ${FONT}`;
-  track(ctx, '0.02em');
-  const w = ctx.measureText(text).width;
-  const x = Math.min(canvas.width - w / 2 - 28, Math.max(w / 2 + 28, at.x));
-  const y = Math.min(maxY, Math.max(36, at.y));
+  track(ctx, '0.01em');
   ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.shadowColor = 'rgba(0,0,0,0.28)';
-  ctx.shadowBlur = 10;
-  ctx.fillText(text, x, y);
+  ctx.shadowBlur = 8;
+  ctx.fillText(text, at.x, at.y);
   ctx.restore();
 }
 
-function drawBead(
+function drawLead(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
+  heading: number,
   cell: number,
   color: string,
   walking: boolean,
   t: number,
 ): void {
-  const r = cell * 0.36;
-  const bob = Math.sin(t * (walking ? 9 : 2.4)) * cell * (walking ? 0.035 : 0.012);
+  const r = cell * 0.68;
+  const bob = Math.sin(t * (walking ? 14 : 3)) * cell * 0.04;
+  const step = walking ? Math.sin(t * 14) : 0;
   ctx.save();
   ctx.translate(x, y + bob);
-  const glow = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 2.2);
-  glow.addColorStop(0, withAlpha(color, 0.7));
-  glow.addColorStop(1, withAlpha(color, 0));
-  ctx.fillStyle = glow;
+  for (let i = 3; i >= 1; i--) {
+    ctx.globalAlpha = 0.16 * (4 - i);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(-Math.cos(heading) * r * 0.85 * i, -Math.sin(heading) * r * 0.85 * i, r * 0.42, r * 0.28, heading, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.rotate(Math.max(-0.35, Math.min(0.35, Math.sin(heading) * 0.4)));
+  ctx.fillStyle = shade(color, 0.55);
   ctx.beginPath();
-  ctx.arc(0, 0, r * 2.2, 0, Math.PI * 2);
+  ctx.ellipse(-r * 0.28, r * 0.72, r * 0.16, r * 0.1, step * 0.5, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.28, r * 0.72, r * 0.16, r * 0.1, -step * 0.5, 0, Math.PI * 2);
   ctx.fill();
-  const sphere = ctx.createRadialGradient(-r * 0.38, -r * 0.42, r * 0.05, 0, 0, r);
-  sphere.addColorStop(0, '#ffffff');
-  sphere.addColorStop(0.42, color);
-  sphere.addColorStop(1, shade(color, 0.62));
-  ctx.fillStyle = sphere;
+  const body = ctx.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.1, 0, 0, r);
+  body.addColorStop(0, '#ffffff');
+  body.addColorStop(0.45, color);
+  body.addColorStop(1, shade(color, 0.7));
+  ctx.fillStyle = body;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = '#1c1917';
+  const look = Math.cos(heading) * r * 0.08;
+  ctx.beginPath();
+  ctx.arc(-r * 0.24 + look, -r * 0.08, r * 0.1, 0, Math.PI * 2);
+  ctx.arc(r * 0.24 + look, -r * 0.08, r * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#1c1917';
+  ctx.lineWidth = Math.max(1.5, r * 0.08);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(0, r * 0.08, r * 0.22, 0.2, Math.PI - 0.2);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -516,23 +663,27 @@ function drawBurst(
   p: number,
   seed: number,
 ): void {
-  ctx.save();
-  ctx.globalAlpha = 0.22 * Math.sin(p * Math.PI);
-  strokeVivid(ctx, placed, placed.total, Math.max(10, cell * 0.72));
-  ctx.restore();
   const goal = placed.points[placed.points.length - 1];
   ctx.save();
-  for (let i = 0; i < 18; i++) {
+  ctx.globalAlpha = 0.35 * Math.sin(Math.min(1, p) * Math.PI);
+  ctx.strokeStyle = '#fffaf3';
+  ctx.lineWidth = Math.max(4, cell * 0.16);
+  ctx.beginPath();
+  ctx.arc(goal.x, goal.y, cell * (0.8 + p * 3.2), 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  for (let i = 0; i < 22; i++) {
     const n = (seed * 13 + i * 97) % 1000;
-    const ang = (i / 18) * Math.PI * 2 + (n % 40) / 90;
-    const speed = 140 + (n % 120);
+    const ang = (i / 22) * Math.PI * 2 + (n % 40) / 80;
+    const speed = 90 + (n % 160);
     const u = easeOutCubic(p);
     const px = goal.x + Math.cos(ang) * speed * u;
-    const py = goal.y + Math.sin(ang) * speed * u * 0.85;
-    ctx.globalAlpha = Math.max(0, 0.9 - p);
+    const py = goal.y + Math.sin(ang) * speed * u;
+    ctx.globalAlpha = Math.max(0, 0.95 - p);
     ctx.fillStyle = MARKER_COLORS[i % MARKER_COLORS.length];
     ctx.beginPath();
-    ctx.arc(px, py, 5 + (n % 7) * (1 - p * 0.4), 0, Math.PI * 2);
+    ctx.arc(px, py, 7 + (n % 8) * (1 - p * 0.35), 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -543,20 +694,24 @@ function drawHook(
   x: number,
   y: number,
   alpha: number,
+  scale: number,
   palette: Palette,
 ): void {
   const lines = ['Can you', 'solve this?'];
   ctx.save();
   ctx.globalAlpha = Math.max(0, alpha);
+  ctx.translate(x, y + 40);
+  ctx.scale(scale, scale);
+  ctx.translate(-x, -(y + 40));
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = palette.text;
   ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.28)';
   ctx.shadowBlur = 16;
-  track(ctx, '-0.03em');
-  ctx.font = `620 68px ${FONT}`;
+  track(ctx, '-0.035em');
+  ctx.font = `680 70px ${FONT}`;
   lines.forEach((line, i) => {
-    ctx.fillText(line, x, y + i * 92);
+    ctx.fillText(line, x, y + i * 88);
   });
   ctx.restore();
 }
@@ -592,8 +747,14 @@ function drawCountdown(
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
   ctx.translate(-cx, -cy);
-  ctx.font = `560 210px ${FONT}`;
-  track(ctx, '-0.06em');
+  const ring = 150 * scale;
+  ctx.beginPath();
+  ctx.strokeStyle = withAlpha(palette.text, 0.35 * alpha);
+  ctx.lineWidth = 8;
+  ctx.arc(cx, cy, ring, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.font = `640 188px ${FONT}`;
+  track(ctx, '-0.05em');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = palette.text;

@@ -1,11 +1,14 @@
 import {
+  AudioBufferSource,
   BufferTarget,
   CanvasSource,
   Mp4OutputFormat,
   Output,
   Quality,
   WebMOutputFormat,
+  canEncodeAudio,
   canEncodeVideo,
+  type AudioCodec,
   type VideoCodec,
 } from 'mediabunny';
 import { REEL_H, REEL_W } from './scene';
@@ -25,6 +28,29 @@ const BITRATE = 8_000_000;
 
 function quality(): Quality {
   return new Quality({ bitrate: BITRATE, bitrateMode: 'variable' });
+}
+
+async function firstAudioCodec(
+  kind: 'mp4' | 'webm',
+  audio: AudioBuffer,
+): Promise<AudioCodec | null> {
+  const candidates: AudioCodec[] = kind === 'mp4' ? ['aac', 'mp3', 'opus'] : ['opus', 'vorbis'];
+  for (const codec of candidates) {
+    try {
+      if (
+        await canEncodeAudio(codec, {
+          numberOfChannels: audio.numberOfChannels,
+          sampleRate: audio.sampleRate,
+          bitrate: 128_000,
+        })
+      ) {
+        return codec;
+      }
+    } catch {
+      /* try the next codec */
+    }
+  }
+  return null;
 }
 
 function isAbort(err: unknown): boolean {
@@ -51,10 +77,11 @@ export async function encodeReel(
   preview: HTMLCanvasElement | null,
   onProgress: (frame: number, total: number) => void,
   signal?: AbortSignal,
+  audio?: AudioBuffer | null,
 ): Promise<EncodeResult> {
   if (await supports('avc')) {
     try {
-      return await encodeWebCodecs('mp4', 'avc', draw, duration, preview, onProgress, signal);
+      return await encodeWebCodecs('mp4', 'avc', draw, duration, preview, onProgress, signal, audio ?? null);
     } catch (err) {
       if (isAbort(err)) throw err;
       console.warn('H.264 encode failed, trying WebM', err);
@@ -63,14 +90,14 @@ export async function encodeReel(
   for (const codec of ['vp9', 'vp8'] as const) {
     if (await supports(codec)) {
       try {
-        return await encodeWebCodecs('webm', codec, draw, duration, preview, onProgress, signal);
+        return await encodeWebCodecs('webm', codec, draw, duration, preview, onProgress, signal, audio ?? null);
       } catch (err) {
         if (isAbort(err)) throw err;
         console.warn(`${codec} encode failed`, err);
       }
     }
   }
-  return encodeMediaRecorder(draw, duration, preview, onProgress, signal);
+  return encodeMediaRecorder(draw, duration, preview, onProgress, signal, audio ?? null);
 }
 
 async function encodeWebCodecs(
@@ -81,6 +108,7 @@ async function encodeWebCodecs(
   preview: HTMLCanvasElement | null,
   onProgress: (frame: number, total: number) => void,
   signal?: AbortSignal,
+  audio?: AudioBuffer | null,
 ): Promise<EncodeResult> {
   const canvas = document.createElement('canvas');
   canvas.width = REEL_W;
@@ -102,7 +130,14 @@ async function encodeWebCodecs(
     keyFrameInterval: 2,
   });
   output.addVideoTrack(source);
+  const audioCodec = audio ? await firstAudioCodec(kind, audio) : null;
+  let audioSource: AudioBufferSource | null = null;
+  if (audio && audioCodec) {
+    audioSource = new AudioBufferSource({ codec: audioCodec, bitrate: 128_000 });
+    output.addAudioTrack(audioSource);
+  }
   await output.start();
+  if (audioSource && audio) await audioSource.add(audio);
 
   const total = Math.max(1, Math.round(duration * REEL_FPS));
   const frameDur = 1 / REEL_FPS;
@@ -134,10 +169,15 @@ async function encodeWebCodecs(
   if (!target.buffer?.byteLength) throw new Error('Encoder produced an empty file.');
   const poster = canvas.toDataURL('image/jpeg', 0.72);
   const mimeType = kind === 'mp4' ? 'video/mp4' : 'video/webm';
+  const sound = audioSource
+    ? `with music (${audioCodec?.toUpperCase()})`
+    : audio
+      ? 'video only (this browser cannot encode AAC, MP3, or Opus)'
+      : 'silent';
   const label =
     kind === 'mp4'
-      ? 'MP4 · H.264'
-      : `WebM · ${codec.toUpperCase()} (this browser cannot encode H.264)`;
+      ? `MP4 · H.264 · ${sound}`
+      : `WebM · ${codec.toUpperCase()} · ${sound}`;
   return {
     blob: new Blob([target.buffer], { type: mimeType }),
     mimeType,
@@ -173,6 +213,7 @@ async function encodeMediaRecorder(
   preview: HTMLCanvasElement | null,
   onProgress: (frame: number, total: number) => void,
   signal?: AbortSignal,
+  _audio?: AudioBuffer | null,
 ): Promise<EncodeResult> {
   const canvas = document.createElement('canvas');
   canvas.width = REEL_W;
@@ -236,7 +277,7 @@ async function encodeMediaRecorder(
     extension,
     poster: canvas.toDataURL('image/jpeg', 0.72),
     label: h264
-      ? 'MP4 · H.264'
-      : 'WebM (this browser cannot encode H.264)',
+      ? 'MP4 · H.264 · video only'
+      : 'WebM · video only (this browser cannot encode H.264)',
   };
 }

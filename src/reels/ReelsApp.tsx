@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import JSZip from 'jszip';
 import { resetCatalogClaims } from '../lib/shape';
 import { PRIMARY_KEYWORDS } from '../lib/themes';
+import { renderReelAudio } from './audio';
 import { encodeReel, type EncodeResult } from './encode';
 import { makeReelMaze, type BuiltMaze } from './makeMaze';
 import {
@@ -15,6 +16,7 @@ import { routeStats } from './route';
 import {
   drawFrame,
   drawSplash,
+  reelEvents,
   REEL_H,
   REEL_W,
   type ReelLook,
@@ -63,6 +65,8 @@ export default function ReelsApp() {
   const [activeBg, setActiveBg] = useState('');
   const [duration, setDuration] = useState(14);
   const [countdown, setCountdown] = useState(true);
+  const [volume, setVolume] = useState(0.8);
+  const [muted, setMuted] = useState(false);
   const [endCard, setEndCard] = useState(true);
   const [cta, setCta] = useState('Follow for a new maze every day');
   const [handle, setHandle] = useState('');
@@ -97,6 +101,9 @@ export default function ReelsApp() {
   const busyRef = useRef(false);
   const paletteRef = useRef(paletteByName(PALETTES[0].name));
   const queueRef = useRef<PaletteQueue>({ items: [], last: null });
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioStopRef = useRef<(() => void) | null>(null);
+  const volumeRef = useRef(0.8);
 
   const palette = paletteName === AUTO_BACKGROUND ? null : paletteByName(paletteName);
   const cols = DENSITIES.find((d) => d.id === density)?.cols ?? 24;
@@ -104,6 +111,7 @@ export default function ReelsApp() {
 
   lookRef.current = { countdown, endCard, duration, cta, handle, cover };
   if (palette) paletteRef.current = palette;
+  volumeRef.current = muted ? 0 : volume;
   busyRef.current = busy;
 
   useEffect(() => {
@@ -139,12 +147,39 @@ export default function ReelsApp() {
   }, [paletteName, countdown]);
 
   useEffect(() => {
-    if (!playing) return;
+    if (!playing) {
+      audioStopRef.current?.();
+      audioStopRef.current = null;
+      return;
+    }
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!ctx) return;
     let raf = 0;
     let alive = true;
+    const scene = sceneRef.current;
+    const look = { ...lookRef.current };
+    const level = volumeRef.current;
+    if (scene && level > 0) {
+      void (async () => {
+        const ac = audioCtxRef.current ?? new AudioContext();
+        audioCtxRef.current = ac;
+        if (ac.state === 'suspended') await ac.resume();
+        const buffer = await renderReelAudio(look.duration, reelEvents(scene, look), level);
+        if (!alive) return;
+        const src = ac.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ac.destination);
+        src.start();
+        audioStopRef.current = () => {
+          try {
+            src.stop();
+          } catch {
+            /* already stopped */
+          }
+        };
+      })();
+    }
     const t0 = performance.now();
     const tick = (now: number) => {
       const scene = sceneRef.current;
@@ -160,6 +195,8 @@ export default function ReelsApp() {
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
+      audioStopRef.current?.();
+      audioStopRef.current = null;
     };
   }, [playing, playId]);
 
@@ -246,6 +283,18 @@ export default function ReelsApp() {
     total: number,
     signal: AbortSignal,
   ): Promise<{ result: EncodeResult; filename: string }> {
+    let audio: AudioBuffer | null = null;
+    if (volumeRef.current > 0) {
+      try {
+        audio = await renderReelAudio(
+          lookRef.current.duration,
+          reelEvents(scene, lookRef.current),
+          volumeRef.current,
+        );
+      } catch {
+        audio = null;
+      }
+    }
     const result = await encodeReel(
       (ctx, t) => drawCurrent(ctx, t, scene),
       lookRef.current.duration,
@@ -258,6 +307,7 @@ export default function ReelsApp() {
         );
       },
       signal,
+      audio,
     );
     const filename = `${String(index).padStart(2, '0')}-${slug(subject)}.${result.extension}`;
     return { result, filename };
@@ -468,6 +518,32 @@ export default function ReelsApp() {
               {palette ? `, starting from ${palette.name}` : ''}.
             </p>
           </div>
+
+          <label className="row">
+            <span>Sound</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round((muted ? 0 : volume) * 100)}
+              onChange={(e) => {
+                setMuted(false);
+                setVolume(Number(e.target.value) / 100);
+              }}
+              disabled={busy}
+            />
+            <strong>{muted || volume === 0 ? 'Off' : `${Math.round(volume * 100)}%`}</strong>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={muted}
+              onChange={(e) => setMuted(e.target.checked)}
+              disabled={busy}
+            />
+            Mute. Preview plays the track. Downloads include it when this browser can mux audio.
+          </label>
 
           <label className="row">
             <span>Length</span>
