@@ -173,7 +173,7 @@ function mazeLayout(
 ): Layout {
   const top = countdown ? 540 : 420;
   const bottom = height - band;
-  const side = 48;
+  const side = 20;
   const spanC = maze.bbox.maxC - maze.bbox.minC + 1 + REEL_MARGIN * 2;
   const spanR = maze.bbox.maxR - maze.bbox.minR + 1 + REEL_MARGIN * 2;
   const cell = Math.min((width - side * 2) / spanC, (bottom - top) / spanR);
@@ -453,25 +453,25 @@ function drawGateLabels(
   const { cell, mx, my } = layout;
   const start = gateScreen(maze, maze.start, maze.startOpen, cell, mx, my);
   const goal = gateScreen(maze, maze.end, maze.endOpen, cell, mx, my);
-  const mazeBox = { x: mx - 10, y: my - 10, w: layout.mw + 20, h: layout.mh + 20 };
+  const mazeBox = { x: mx - 18, y: my - 18, w: layout.mw + 36, h: layout.mh + 36 };
   ctx.save();
-  ctx.font = `600 26px ${FONT}`;
+  ctx.font = `600 28px ${FONT}`;
   const startAt = placeClearLabel(
     start,
     maze.startOpen,
-    ctx.measureText('Start').width,
-    32,
+    ctx.measureText('Start').width + 12,
+    40,
     ctx.canvas.width,
     minY,
     maxY,
     [mazeBox],
   );
-  const startBox = textBox(startAt, ctx.measureText('Start').width, 32);
+  const startBox = textBox(startAt, ctx.measureText('Start').width + 12, 40);
   const goalAt = placeClearLabel(
     goal,
     maze.endOpen,
-    ctx.measureText('Goal').width,
-    32,
+    ctx.measureText('Goal').width + 12,
+    40,
     ctx.canvas.width,
     minY,
     maxY,
@@ -593,15 +593,33 @@ function placeClearLabel(
 
 function drawTag(ctx: CanvasRenderingContext2D, text: string, at: TrackPoint, color: string): void {
   ctx.save();
-  ctx.font = `600 26px ${FONT}`;
+  ctx.font = `600 28px ${FONT}`;
   track(ctx, '0.01em');
-  ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.shadowColor = 'rgba(0,0,0,0.28)';
-  ctx.shadowBlur = 8;
-  ctx.fillText(text, at.x, at.y);
+  paintOutlined(ctx, text, at.x, at.y, color, 28);
   ctx.restore();
+}
+
+function outlineFor(fill: string): string {
+  return lum(fill) > 0.62 ? '#1c1614' : '#fffaf6';
+}
+
+function paintOutlined(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  fill: string,
+  fontPx: number,
+): void {
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(8, Math.min(18, fontPx * 0.2));
+  ctx.strokeStyle = outlineFor(fill);
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
 }
 
 function drawLead(
@@ -705,13 +723,10 @@ function drawHook(
   ctx.translate(-x, -(y + 40));
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = palette.text;
-  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.28)';
-  ctx.shadowBlur = 16;
   track(ctx, '-0.035em');
   ctx.font = `680 70px ${FONT}`;
   lines.forEach((line, i) => {
-    ctx.fillText(line, x, y + i * 88);
+    paintOutlined(ctx, line, x, y + i * 88, palette.text, 70);
   });
   ctx.restore();
 }
@@ -757,10 +772,7 @@ function drawCountdown(
   track(ctx, '-0.05em');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = palette.text;
-  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.25)';
-  ctx.shadowBlur = 20;
-  ctx.fillText(String(digit), cx, cy);
+  paintOutlined(ctx, String(digit), cx, cy, palette.text, 188);
   ctx.restore();
 }
 
@@ -813,21 +825,25 @@ function drawEndCard(
     cursor += imgH + 28;
   }
 
-  ctx.fillStyle = palette.text;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.22)';
-  ctx.shadowBlur = 12;
   track(ctx, '-0.02em');
   ctx.font = `600 ${fitted.size}px ${FONT}`;
   for (let i = 0; i < fitted.lines.length; i++) {
-    ctx.fillText(fitted.lines[i], width / 2, cursor + fitted.lineH * 0.5 + i * fitted.lineH);
+    paintOutlined(
+      ctx,
+      fitted.lines[i],
+      width / 2,
+      cursor + fitted.lineH * 0.5 + i * fitted.lineH,
+      palette.text,
+      fitted.size,
+    );
   }
   if (handle) {
     track(ctx, '0.06em');
     ctx.font = `560 26px ${FONT}`;
-    ctx.globalAlpha = p * 0.8;
-    ctx.fillText(handle, width / 2, cursor + textH + 40);
+    ctx.globalAlpha = p * 0.9;
+    paintOutlined(ctx, handle, width / 2, cursor + textH + 40, palette.text, 26);
   }
   ctx.restore();
 }
@@ -905,10 +921,6 @@ function roundRect(
   ctx.arcTo(x, y + h, x, y, radius);
   ctx.arcTo(x, y, x + w, y, radius);
   ctx.closePath();
-}
-
-function isLight(palette: Palette): boolean {
-  return (lum(palette.bg) + lum(palette.bgEnd)) / 2 > 0.62;
 }
 
 function lum(hex: string): number {

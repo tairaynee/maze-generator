@@ -10,7 +10,7 @@ import { edgeKey, neighbor, solvePath, type Maze } from '../lib/maze';
 const DR = [-1, 0, 1, 0];
 const DC = [0, 1, 0, -1];
 
-export const REEL_MARGIN = 2;
+export const REEL_MARGIN = 1;
 
 export function passageDegree(maze: Maze, idx: number): number {
   let n = 0;
