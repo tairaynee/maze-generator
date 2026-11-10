@@ -95,7 +95,7 @@ function bfs(
 /** Cells in the silhouette that touch the OUTER background (off-grid or
  *  the flood-filled exterior), so start/end never end up against an
  *  interior hole that visually sits "inside" the maze. */
-function outerBoundaryCells(
+export function outerBoundaryCells(
   cells: boolean[],
   cols: number,
   rows: number,

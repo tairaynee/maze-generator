@@ -1,5 +1,6 @@
 import { generateMaze, type Maze } from '../lib/maze';
 import { fetchSilhouette, maskGrid } from '../lib/shape';
+import { assignShapeGates } from './gates';
 import { solutionRoute } from './route';
 
 export interface BuiltMaze {
@@ -32,6 +33,7 @@ export async function makeReelMaze(
         forceProcedural,
       });
       const maze = generateMaze(maskGrid(sil, cols, cols), cols, cols, s);
+      assignShapeGates(maze, s);
       const route = solutionRoute(maze);
       return {
         maze,

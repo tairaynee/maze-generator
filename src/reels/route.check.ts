@@ -1,6 +1,8 @@
 // Run with: npx esbuild src/reels/route.check.ts --bundle --platform=node --format=esm --outfile=/tmp/route-check.mjs && node /tmp/route-check.mjs
 
-import { generateMaze, edgeKey, type Maze } from '../lib/maze';
+import { generateMaze, edgeKey, outerBoundaryCells, type Maze } from '../lib/maze';
+import { assignShapeGates } from './gates';
+import { CTAS, HOOKS, emptyCopyQueue, takeCopy } from './copy';
 import { MARKER_COLORS, PALETTES, takeBackgrounds, type PaletteQueue } from './palettes';
 import {
   assertSolution,
@@ -11,7 +13,14 @@ import {
   segmentRoute,
   solutionRoute,
 } from './route';
-import { buildTimeline, easeMarker, PLAY_ALONG_SEC } from './timeline';
+import {
+  buildTimeline,
+  clampPlayAlong,
+  easeMarker,
+  PLAY_ALONG_DEFAULT,
+  PLAY_ALONG_MAX,
+  PLAY_ALONG_MIN,
+} from './timeline';
 
 function check(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -179,20 +188,25 @@ function runSegments(): void {
 }
 
 function runTimeline(): void {
-  const combos: Array<[number, boolean, boolean]> = [];
+  check(PLAY_ALONG_DEFAULT < 7, 'default wait should be shorter than 7s');
+  check(PLAY_ALONG_DEFAULT >= PLAY_ALONG_MIN && PLAY_ALONG_DEFAULT <= PLAY_ALONG_MAX, 'default wait in range');
+  const combos: Array<[number, boolean, boolean, number]> = [];
   for (const d of [20, 24, 30]) {
     for (const c of [false, true]) {
-      for (const e of [false, true]) combos.push([d, c, e]);
+      for (const e of [false, true]) {
+        for (const hold of [PLAY_ALONG_MIN, PLAY_ALONG_DEFAULT, 7, PLAY_ALONG_MAX]) {
+          combos.push([d, c, e, hold]);
+        }
+      }
     }
   }
-  for (const [d, c, e] of combos) {
-    const t = buildTimeline(d, c, e);
+  for (const [d, c, e, hold] of combos) {
+    const t = buildTimeline(d, c, e, hold);
     approx(t.duration, d, 'duration');
     approx(t.hookEnd, 1, 'hook');
     check(t.countEnd >= t.hookEnd, 'countdown order');
     check(t.holdEnd >= t.countEnd, 'hold order');
-    approx(t.holdEnd - t.countEnd, PLAY_ALONG_SEC, 'play-along hold');
-    check(t.holdEnd - t.countEnd >= 6 && t.holdEnd - t.countEnd <= 8, 'hold window');
+    approx(t.holdEnd - t.countEnd, hold, 'play-along hold');
     check(t.walkEnd > t.holdEnd + 4, 'coloring starts after the hold');
     check(t.burstEnd > t.walkEnd, 'burst');
     check(t.burstEnd <= t.duration + 1e-6, 'burst inside the reel');
@@ -200,11 +214,15 @@ function runTimeline(): void {
     if (!c) approx(t.countEnd, t.hookEnd, 'no countdown');
     if (c) approx(t.countEnd - t.hookEnd, 3, 'countdown is one second per beat');
   }
-  const short = buildTimeline(10, true, true);
+  const fallback = buildTimeline(24, true, true);
+  approx(fallback.holdEnd - fallback.countEnd, PLAY_ALONG_DEFAULT, 'default hold');
+  const short = buildTimeline(10, true, true, PLAY_ALONG_MAX);
   approx(short.duration, 20, 'short request clamps up');
-  approx(short.holdEnd - short.countEnd, PLAY_ALONG_SEC, 'short reel kept the hold');
+  approx(short.holdEnd - short.countEnd, PLAY_ALONG_MAX, 'short reel kept the hold');
   approx(short.countEnd - short.hookEnd, 3, 'short reel kept the countdown');
   check(short.walkEnd > short.holdEnd, 'short reel still walks the solution');
+  approx(clampPlayAlong(1), PLAY_ALONG_MIN, 'wait clamps up');
+  approx(clampPlayAlong(40), PLAY_ALONG_MAX, 'wait clamps down');
 }
 
 function runEase(): void {
@@ -219,6 +237,182 @@ function runEase(): void {
   approx(easeMarker(1), 1, 'ease end');
   const mid = easeMarker(0.5);
   check(mid > 0.42 && mid < 0.58, `ease should stay near the middle, got ${mid}`);
+}
+
+function hexChannels(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+function hueOf(hex: string): number {
+  const [r0, g0, b0] = hexChannels(hex);
+  const r = r0 / 255;
+  const g = g0 / 255;
+  const b = b0 / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d < 0.06) return -1;
+  let hue = 0;
+  if (max === r) hue = ((g - b) / d) % 6;
+  else if (max === g) hue = (b - r) / d + 2;
+  else hue = (r - g) / d + 4;
+  return (hue * 60 + 360) % 360;
+}
+
+function hueGap(a: number, b: number): number {
+  if (a < 0 || b < 0) return 0;
+  const d = Math.abs(a - b);
+  return Math.min(d, 360 - d);
+}
+
+function rgbDistance(a: string, b: string): number {
+  const [ar, ag, ab] = hexChannels(a);
+  const [br, bg, bb] = hexChannels(b);
+  return Math.hypot(ar - br, ag - bg, ab - bb);
+}
+
+function hsvOf(hex: string): { s: number; v: number } {
+  const [r0, g0, b0] = hexChannels(hex);
+  const r = r0 / 255;
+  const g = g0 / 255;
+  const b = b0 / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return { s: max === 0 ? 0 : (max - min) / max, v: max };
+}
+
+function runGradients(): void {
+  const names = new Set<string>();
+  for (const palette of PALETTES) {
+    check(!names.has(palette.name), `duplicate palette ${palette.name}`);
+    names.add(palette.name);
+    const stops = [palette.bg, palette.bgMid, palette.bgEnd];
+    check(new Set(stops).size === 3, `${palette.name} repeats a stop`);
+    const hues = stops.map(hueOf);
+    let gap = 0;
+    let far = 0;
+    for (let i = 0; i < stops.length; i++) {
+      for (let j = i + 1; j < stops.length; j++) {
+        gap = Math.max(gap, hueGap(hues[i], hues[j]));
+        far = Math.max(far, rgbDistance(stops[i], stops[j]));
+      }
+      const { s, v } = hsvOf(stops[i]);
+      check(!(s > 0.85 && v > 0.9), `${palette.name} stop looks neon`);
+    }
+    check(gap >= 40, `${palette.name} gradient is a single hue (${gap.toFixed(0)}°)`);
+    check(far >= 70, `${palette.name} gradient is nearly flat`);
+  }
+}
+
+function runCopy(): void {
+  check(HOOKS.length >= 8 && CTAS.length >= 8, 'line pools are too small for a batch');
+  check(new Set(HOOKS.map((lines) => lines.join('\n'))).size === HOOKS.length, 'duplicate hooks');
+  check(new Set(CTAS).size === CTAS.length, 'duplicate closing lines');
+  for (const lines of HOOKS) {
+    check(lines.length >= 1 && lines.length <= 2, 'hook should be one or two lines');
+    for (const line of lines) check(line.trim().length > 0 && line.length <= 22, `hook line is awkward: ${line}`);
+  }
+  for (const line of CTAS) check(line.trim().length >= 12 && line.length <= 48, `closing line is awkward: ${line}`);
+
+  const first = takeCopy(emptyCopyQueue(), 8, 42);
+  check(first.copies.length === 8, 'copy batch length');
+  check(new Set(first.copies.map((c) => c.hook.join('\n'))).size === 8, 'hooks repeat inside a batch');
+  check(new Set(first.copies.map((c) => c.cta)).size === 8, 'closing lines repeat inside a batch');
+  const second = takeCopy(first.queue, 1, 99);
+  check(second.copies[0].hook.join('\n') !== first.copies[7].hook.join('\n'), 'next reel repeated the last hook');
+  check(second.copies[0].cta !== first.copies[7].cta, 'next reel repeated the last closing line');
+
+  let queue = emptyCopyQueue();
+  let prevHook = '';
+  let prevCta = '';
+  for (let i = 0; i < HOOKS.length * 2; i++) {
+    const next = takeCopy(queue, 1, 1000 + i);
+    queue = next.queue;
+    const hook = next.copies[0].hook.join('\n');
+    const cta = next.copies[0].cta;
+    if (i > 0) {
+      check(hook !== prevHook, 'adjacent reels shared a hook');
+      check(cta !== prevCta, 'adjacent reels shared a closing line');
+    }
+    prevHook = hook;
+    prevCta = cta;
+  }
+}
+
+function plusMask(cols: number): boolean[] {
+  const inside = new Array<boolean>(cols * cols).fill(false);
+  const mid = Math.floor(cols / 2);
+  const arm = Math.floor(cols * 0.36);
+  const thick = 2;
+  for (let r = mid - arm; r <= mid + arm; r++) {
+    for (let c = mid - arm; c <= mid + arm; c++) {
+      if (r < 0 || c < 0 || r >= cols || c >= cols) continue;
+      if (Math.abs(r - mid) <= thick || Math.abs(c - mid) <= thick) inside[r * cols + c] = true;
+    }
+  }
+  return inside;
+}
+
+function armKind(idx: number, cols: number): 'h' | 'v' | 'c' {
+  const mid = Math.floor(cols / 2);
+  const r = Math.floor(idx / cols);
+  const c = idx % cols;
+  if (Math.abs(r - mid) <= 2 && Math.abs(c - mid) > 2) return 'h';
+  if (Math.abs(c - mid) <= 2 && Math.abs(r - mid) > 2) return 'v';
+  return 'c';
+}
+
+function runGates(): void {
+  const cols = 24;
+  const outerOf = (maze: Maze) => new Set(outerBoundaryCells(maze.cells, maze.cols, maze.rows));
+  const pairs = new Set<string>();
+  const kinds = new Set<string>();
+  for (let seed = 1; seed <= 16; seed++) {
+    const maze = generateMaze(plusMask(cols), cols, cols, seed);
+    assignShapeGates(maze, seed);
+    const outer = outerOf(maze);
+    check(outer.has(maze.start) && outer.has(maze.end), `plus gates left the outline at seed ${seed}`);
+    check(maze.start !== maze.end, 'plus gates collapsed');
+    const route = solutionRoute(maze);
+    const on = new Set(route);
+    for (let i = 0; i < maze.cells.length; i++) {
+      if (!maze.cells[i] || i === maze.start || i === maze.end) continue;
+      if (passageDegree(maze, i) === 1) check(!on.has(i), `plus dead end ${i} was drawn`);
+    }
+    const key = [maze.start, maze.end].sort((a, b) => a - b).join(':');
+    pairs.add(key);
+    kinds.add(armKind(maze.start, cols));
+    kinds.add(armKind(maze.end, cols));
+    check(armKind(maze.start, cols) !== 'c' && armKind(maze.end, cols) !== 'c', 'plus gate sat in the cross');
+  }
+  check(pairs.size >= 2, 'plus silhouettes reused one gate pair');
+  check(kinds.has('h') && kinds.has('v'), 'plus gates stayed on one axis');
+
+  const diskPairs = new Set<string>();
+  const angles: number[] = [];
+  for (let seed = 1; seed <= 10; seed++) {
+    const maze = generateMaze(disk(cols, 8.2), cols, cols, seed + 40);
+    assignShapeGates(maze, seed + 40);
+    const route = solutionRoute(maze);
+    check(route[0] === maze.start && route[route.length - 1] === maze.end, 'disk route endpoints');
+    diskPairs.add([maze.start, maze.end].sort((a, b) => a - b).join(':'));
+    const sr = Math.floor(maze.start / cols);
+    const sc = maze.start % cols;
+    const er = Math.floor(maze.end / cols);
+    const ec = maze.end % cols;
+    angles.push(Math.atan2(er - sr, ec - sc));
+  }
+  check(diskPairs.size >= 2, 'disk gates ignored the seed');
+  let angleSpread = 0;
+  for (let i = 0; i < angles.length; i++) {
+    for (let j = i + 1; j < angles.length; j++) {
+      let d = Math.abs(angles[i] - angles[j]);
+      d = Math.min(d, Math.PI - d);
+      angleSpread = Math.max(angleSpread, d);
+    }
+  }
+  check(angleSpread > 0.35, 'disk gates stayed on one diagonal');
 }
 
 function runBackgrounds(): void {
@@ -243,6 +437,9 @@ function runBackgrounds(): void {
   check(PALETTES.length >= 8, 'not enough backgrounds for a batch of 8');
 }
 
+runGradients();
+runCopy();
+runGates();
 runBackgrounds();
 runHandMaze();
 runGenerated();

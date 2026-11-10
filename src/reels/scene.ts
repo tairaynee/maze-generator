@@ -25,6 +25,10 @@ export interface ReelScene {
   palette: Palette;
   subject: string;
   seed: number;
+  /** Opening lines, on screen before the countdown. */
+  hook: string[];
+  /** Closing caption on the end card. */
+  cta: string;
   cache: { key: string; floor: HTMLCanvasElement; walls: HTMLCanvasElement } | null;
 }
 
@@ -32,7 +36,7 @@ export interface ReelLook {
   countdown: boolean;
   endCard: boolean;
   duration: number;
-  cta: string;
+  holdSec: number;
   handle: string;
   cover: HTMLImageElement | null;
 }
@@ -71,7 +75,7 @@ export function drawFrame(
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
   const t = Math.max(0, time);
-  const timeline = buildTimeline(look.duration, look.countdown, look.endCard);
+  const timeline = buildTimeline(look.duration, look.countdown, look.endCard, look.holdSec);
   const palette = scene.palette;
 
   ctx.save();
@@ -130,13 +134,13 @@ export function drawFrame(
   ctx.restore();
 
   const labelMinY = look.countdown ? 470 : 340;
-  drawGateLabels(ctx, scene, layout, labelMinY, height - band - 24);
+  drawGateLabels(ctx, scene, layout, labelMinY, height - band - 24, look.countdown);
 
   if (t < timeline.hookEnd) {
     const fade =
       t < timeline.hookEnd - 0.22 ? 1 : 1 - (t - (timeline.hookEnd - 0.22)) / 0.22;
     const popIn = 0.94 + 0.06 * easeOutBack(clamp01(t / 0.38));
-    drawHook(ctx, width / 2, 176, fade, popIn, palette);
+    drawHook(ctx, width, fade, popIn, palette, scene.hook);
   }
 
   if (look.countdown && t >= timeline.hookEnd && t < timeline.countEnd) {
@@ -145,7 +149,7 @@ export function drawFrame(
 
   if (look.endCard && t >= timeline.burstEnd) {
     const p = clamp01((t - timeline.burstEnd) / 0.4);
-    drawEndCard(ctx, look, palette, width, height, p);
+    drawEndCard(ctx, look, scene, palette, width, height, p);
   }
 
   ctx.restore();
@@ -341,7 +345,7 @@ export interface ReelEvents {
 
 /** Times, in seconds, for the soundtrack hits. Matches the drawn timeline. */
 export function reelEvents(scene: ReelScene, look: ReelLook): ReelEvents {
-  const timeline = buildTimeline(look.duration, look.countdown, look.endCard);
+  const timeline = buildTimeline(look.duration, look.countdown, look.endCard, look.holdSec);
   const layout = mazeLayout(scene.maze, REEL_W, REEL_H, look.countdown, captionBand(look));
   const built = buildColoredTrack(scene.maze, scene.route, layout.cell, MARKER_COLORS);
   const placed = placeTrack(built.points, built.spans);
@@ -449,38 +453,64 @@ function drawGateLabels(
   layout: Layout,
   minY: number,
   maxY: number,
+  countdown: boolean,
 ): void {
   const { maze, palette } = scene;
   const { cell, mx, my } = layout;
   const start = gateScreen(maze, maze.start, maze.startOpen, cell, mx, my);
   const goal = gateScreen(maze, maze.end, maze.endOpen, cell, mx, my);
-  const mazeBox = { x: mx - 18, y: my - 18, w: layout.mw + 36, h: layout.mh + 36 };
+  const occupied = shapeBlockers(maze, layout);
+  const countdownFoot: Box[] = countdown
+    ? [{ x: ctx.canvas.width / 2 - 190, y: 250, w: 380, h: 300 }]
+    : [];
   ctx.save();
   ctx.font = `600 28px ${FONT}`;
-  const startAt = placeClearLabel(
+  const startW = ctx.measureText('Start').width + 16;
+  const goalW = ctx.measureText('Goal').width + 16;
+  const ring = Math.max(28, cell * 0.7);
+  const startAt = placeBesideGate(
     start,
     maze.startOpen,
-    ctx.measureText('Start').width + 12,
-    40,
+    startW,
+    44,
     ctx.canvas.width,
     minY,
     maxY,
-    [mazeBox],
+    [...occupied, ...countdownFoot, ringBox(goal, ring)],
   );
-  const startBox = textBox(startAt, ctx.measureText('Start').width + 12, 40);
-  const goalAt = placeClearLabel(
+  const goalAt = placeBesideGate(
     goal,
     maze.endOpen,
-    ctx.measureText('Goal').width + 12,
-    40,
+    goalW,
+    44,
     ctx.canvas.width,
     minY,
     maxY,
-    [mazeBox, startBox],
+    [...occupied, ...countdownFoot, ringBox(start, ring), textBox(startAt, startW, 44)],
   );
   ctx.restore();
   drawTag(ctx, 'Start', startAt, palette.text);
   drawTag(ctx, 'Goal', goalAt, palette.text);
+}
+
+function ringBox(at: TrackPoint, size: number): Box {
+  return { x: at.x - size / 2, y: at.y - size / 2, w: size, h: size };
+}
+
+/** Filled cells only, so a label can sit in the silhouette's own bays. */
+function shapeBlockers(maze: Maze, layout: Layout): Box[] {
+  const { cell, mx, my } = layout;
+  const pad = Math.max(3, cell * 0.12);
+  const boxes: Box[] = [];
+  for (let i = 0; i < maze.cells.length; i++) {
+    if (!maze.cells[i]) continue;
+    const r = Math.floor(i / maze.cols);
+    const c = i % maze.cols;
+    const x = mx + (c - maze.bbox.minC + REEL_MARGIN) * cell;
+    const y = my + (r - maze.bbox.minR + REEL_MARGIN) * cell;
+    boxes.push({ x: x - pad, y: y - pad, w: cell + pad * 2, h: cell + pad * 2 });
+  }
+  return boxes;
 }
 
 function gateScreen(
@@ -558,8 +588,25 @@ function boxesOverlap(a: Box, b: Box): boolean {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
-/** Puts a label in open space outside the maze, never on the walls or another label. */
-function placeClearLabel(
+function labelFits(
+  at: TrackPoint,
+  textW: number,
+  textH: number,
+  canvasW: number,
+  minY: number,
+  maxY: number,
+  blocked: Box[],
+): boolean {
+  const box = textBox(at, textW, textH);
+  if (box.x < 16 || box.y < minY || box.x + box.w > canvasW - 16 || box.y + box.h > maxY) return false;
+  return !blocked.some((b) => boxesOverlap(box, b));
+}
+
+/**
+ * Sets the word just outside this gate. The first tries follow the opening,
+ * so a wing tip, a foot, or a head each keep their own label.
+ */
+function placeBesideGate(
   anchor: TrackPoint,
   openDir: number,
   textW: number,
@@ -569,27 +616,38 @@ function placeClearLabel(
   maxY: number,
   blocked: Box[],
 ): TrackPoint {
-  const dirs =
-    openDir >= 0
-      ? [openDir, (openDir + 1) % 4, (openDir + 3) % 4, (openDir + 2) % 4]
-      : [0, 1, 2, 3];
-  for (const dist of [78, 118, 164, 214]) {
+  const fits = (at: TrackPoint) => labelFits(at, textW, textH, canvasW, minY, maxY, blocked);
+  const open = openDir >= 0 ? openDir : 0;
+  const dirs = [open, (open + 1) % 4, (open + 3) % 4, (open + 2) % 4];
+  for (const dist of [42, 58, 76, 98, 124]) {
     for (const d of dirs) {
-      const at = nudge(anchor, d, dist);
-      const box = textBox(at, textW, textH);
-      if (box.x < 18 || box.y < minY || box.x + box.w > canvasW - 18 || box.y + box.h > maxY) {
-        continue;
+      const side = (d + 1) % 4;
+      for (const lat of [0, 20, -20]) {
+        const at = nudge(anchor, d, dist);
+        at.x += ODX[side] * lat;
+        at.y += ODY[side] * lat;
+        if (fits(at)) return at;
       }
-      if (blocked.some((b) => boxesOverlap(box, b))) continue;
-      return at;
     }
   }
-  const maze = blocked[0];
-  const y = Math.min(maxY - textH / 2 - 4, Math.max(minY + textH / 2 + 4, (maze?.y ?? minY) - textH / 2 - 14));
-  const left = maze ? maze.x - textW / 2 - 16 : 40;
-  const right = maze ? maze.x + maze.w + textW / 2 + 16 : canvasW - 40;
-  const x = left >= textW / 2 + 18 ? left : Math.min(canvasW - textW / 2 - 18, right);
-  return { x, y };
+  let best: TrackPoint | null = null;
+  let bestD = Infinity;
+  for (let dy = -160; dy <= 160; dy += 20) {
+    for (let dx = -160; dx <= 160; dx += 20) {
+      if (dx * dx + dy * dy < 36 * 36) continue;
+      const at = { x: anchor.x + dx, y: anchor.y + dy };
+      if (dx * dx + dy * dy < bestD && fits(at)) {
+        best = at;
+        bestD = dx * dx + dy * dy;
+      }
+    }
+  }
+  if (best) return best;
+  const fallback = nudge(anchor, open, 64);
+  return {
+    x: Math.min(canvasW - textW / 2 - 18, Math.max(textW / 2 + 18, fallback.x)),
+    y: Math.min(maxY - textH / 2 - 4, Math.max(minY + textH / 2 + 4, fallback.y)),
+  };
 }
 
 function drawTag(ctx: CanvasRenderingContext2D, text: string, at: TrackPoint, color: string): void {
@@ -710,24 +768,35 @@ function drawBurst(
 
 function drawHook(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
+  width: number,
   alpha: number,
   scale: number,
   palette: Palette,
+  hook: readonly string[],
 ): void {
-  const lines = ['Can you', 'solve this?'];
+  const lines = (hook.length ? hook : ['Can you', 'solve this maze?']).slice(0, 3);
+  const maxW = width - 140;
+  let size = 68;
   ctx.save();
+  track(ctx, '-0.035em');
+  for (; size >= 44; size -= 2) {
+    ctx.font = `680 ${size}px ${FONT}`;
+    if (lines.every((line) => ctx.measureText(line).width <= maxW)) break;
+  }
+  const lineH = Math.round(size * 1.16);
+  const blockH = lines.length * lineH;
+  const top = 156;
+  const cx = width / 2;
+  const cy = top + blockH / 2;
   ctx.globalAlpha = Math.max(0, alpha);
-  ctx.translate(x, y + 40);
+  ctx.translate(cx, cy);
   ctx.scale(scale, scale);
-  ctx.translate(-x, -(y + 40));
+  ctx.translate(-cx, -cy);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  track(ctx, '-0.035em');
-  ctx.font = `680 70px ${FONT}`;
+  ctx.font = `680 ${size}px ${FONT}`;
   lines.forEach((line, i) => {
-    paintOutlined(ctx, line, x, y + i * 88, palette.text, 70);
+    paintOutlined(ctx, line, cx, top + lineH * 0.5 + i * lineH, palette.text, size);
   });
   ctx.restore();
 }
@@ -780,12 +849,13 @@ function drawCountdown(
 function drawEndCard(
   ctx: CanvasRenderingContext2D,
   look: ReelLook,
+  scene: ReelScene,
   palette: Palette,
   width: number,
   height: number,
   p: number,
 ): void {
-  const cta = look.cta.trim() || 'Follow for a new maze every day';
+  const cta = scene.cta.trim() || 'Follow for a new maze every day';
   const cover = look.cover && look.cover.complete && look.cover.naturalWidth > 0 ? look.cover : null;
   const band = captionBand(look);
   const bandTop = height - band;
@@ -876,16 +946,25 @@ function drawBackground(
   t: number,
 ): void {
   const drift = Math.sin(t * 0.35) * 0.03;
-  const g = ctx.createLinearGradient(0, 0, width, height);
+  const rad = (palette.angle * Math.PI) / 180;
+  const cx = width / 2;
+  const cy = height / 2;
+  const half = Math.hypot(width, height) / 2;
+  const g = ctx.createLinearGradient(
+    cx - Math.cos(rad) * half,
+    cy - Math.sin(rad) * half,
+    cx + Math.cos(rad) * half,
+    cy + Math.sin(rad) * half,
+  );
   g.addColorStop(0, palette.bg);
-  g.addColorStop(0.48 + drift, palette.bgMid);
+  g.addColorStop(Math.min(0.62, Math.max(0.38, 0.5 + drift)), palette.bgMid);
   g.addColorStop(1, palette.bgEnd);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
-  const orb = ctx.createRadialGradient(width * 0.15, height * 0.08, 0, width * 0.15, height * 0.08, width * 0.75);
-  orb.addColorStop(0, 'rgba(255,255,255,0.22)');
-  orb.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = orb;
+  const glow = ctx.createRadialGradient(width * 0.18, height * 0.08, 0, width * 0.18, height * 0.08, width * 0.7);
+  glow.addColorStop(0, withAlpha(palette.bg, 0.2));
+  glow.addColorStop(1, withAlpha(palette.bg, 0));
+  ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
 }
 
