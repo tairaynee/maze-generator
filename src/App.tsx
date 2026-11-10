@@ -570,6 +570,9 @@ export default function App() {
   return (
     <div className="app">
       <header>
+        <a className="studio-link" href={`${import.meta.env.BASE_URL}reels/`}>
+          Maze Reels Studio
+        </a>
         <h1>Theme Maze Book Generator</h1>
         <p className="sub">
           One keyword → a whole book of mazes in that shape. Add a cover

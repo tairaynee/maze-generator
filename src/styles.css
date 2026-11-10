@@ -32,6 +32,19 @@ header h1 {
   letter-spacing: -0.5px;
 }
 
+.studio-link {
+  display: inline-block;
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.studio-link:hover {
+  text-decoration: underline;
+}
+
 .sub {
   margin: 0 0 20px;
   color: var(--muted);
