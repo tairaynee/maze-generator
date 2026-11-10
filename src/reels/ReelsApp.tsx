@@ -5,6 +5,7 @@ import { PRIMARY_KEYWORDS } from '../lib/themes';
 import { renderReelAudio } from './audio';
 import { encodeReel, type EncodeResult } from './encode';
 import { makeReelMaze, type BuiltMaze } from './makeMaze';
+import { emptyCopyQueue, takeCopy, type CopyQueue } from './copy';
 import {
   AUTO_BACKGROUND,
   PALETTES,
@@ -22,7 +23,15 @@ import {
   type ReelLook,
   type ReelScene,
 } from './scene';
-import { buildTimeline, REEL_MAX_SEC, REEL_MIN_SEC, reelPhase } from './timeline';
+import {
+  buildTimeline,
+  PLAY_ALONG_DEFAULT,
+  PLAY_ALONG_MAX,
+  PLAY_ALONG_MIN,
+  REEL_MAX_SEC,
+  REEL_MIN_SEC,
+  reelPhase,
+} from './timeline';
 
 const DENSITIES = [
   { id: 'chunky', label: 'Chunky', cols: 18 },
@@ -64,12 +73,15 @@ export default function ReelsApp() {
   const [paletteName, setPaletteName] = useState(AUTO_BACKGROUND);
   const [activeBg, setActiveBg] = useState('');
   const [duration, setDuration] = useState(24);
+  const [holdSec, setHoldSec] = useState(PLAY_ALONG_DEFAULT);
   const [phase, setPhase] = useState('');
   const [countdown, setCountdown] = useState(true);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
   const [endCard, setEndCard] = useState(true);
-  const [cta, setCta] = useState('Follow for a new maze every day');
+  const [hookLines, setHookLines] = useState<string[]>([]);
+  const [ctaLine, setCtaLine] = useState('');
+  const [previewed, setPreviewed] = useState(false);
   const [handle, setHandle] = useState('');
   const [cover, setCover] = useState<HTMLImageElement | null>(null);
   const [coverName, setCoverName] = useState('');
@@ -89,7 +101,7 @@ export default function ReelsApp() {
     countdown: true,
     endCard: true,
     duration: 24,
-    cta: 'Follow for a new maze every day',
+    holdSec: PLAY_ALONG_DEFAULT,
     handle: '',
     cover: null,
   });
@@ -102,6 +114,7 @@ export default function ReelsApp() {
   const busyRef = useRef(false);
   const paletteRef = useRef(paletteByName(PALETTES[0].name));
   const queueRef = useRef<PaletteQueue>({ items: [], last: null });
+  const copyQueueRef = useRef<CopyQueue>(emptyCopyQueue());
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioStopRef = useRef<(() => void) | null>(null);
   const pendingAudio = useRef<Promise<AudioBuffer | null> | null>(null);
@@ -109,9 +122,9 @@ export default function ReelsApp() {
 
   const palette = paletteName === AUTO_BACKGROUND ? null : paletteByName(paletteName);
   const cols = DENSITIES.find((d) => d.id === density)?.cols ?? 24;
-  const timeline = buildTimeline(duration, countdown, endCard);
+  const timeline = buildTimeline(duration, countdown, endCard, holdSec);
 
-  lookRef.current = { countdown, endCard, duration, cta, handle, cover };
+  lookRef.current = { countdown, endCard, duration, holdSec, handle, cover };
   if (palette) paletteRef.current = palette;
   volumeRef.current = muted ? 0 : volume;
   busyRef.current = busy;
@@ -175,7 +188,7 @@ export default function ReelsApp() {
 
   function armSoundtrack(scene: ReelScene): void {
     const look = lookRef.current;
-    const seconds = buildTimeline(look.duration, look.countdown, look.endCard).duration;
+    const seconds = buildTimeline(look.duration, look.countdown, look.endCard, look.holdSec).duration;
     pendingAudio.current =
       volumeRef.current > 0
         ? renderReelAudio(seconds, reelEvents(scene, look), volumeRef.current)
@@ -196,7 +209,7 @@ export default function ReelsApp() {
     let alive = true;
     const scene = sceneRef.current;
     const look = { ...lookRef.current };
-    const total = buildTimeline(look.duration, look.countdown, look.endCard).duration;
+    const total = buildTimeline(look.duration, look.countdown, look.endCard, look.holdSec).duration;
     const level = volumeRef.current;
     const pending = pendingAudio.current;
     pendingAudio.current = null;
@@ -216,7 +229,7 @@ export default function ReelsApp() {
         drawFrame(ctx, sceneNow, lookNow, shown);
         const next = reelPhase(
           shown,
-          buildTimeline(lookNow.duration, lookNow.countdown, lookNow.endCard),
+          buildTimeline(lookNow.duration, lookNow.countdown, lookNow.endCard, lookNow.holdSec),
           lookNow.countdown,
         );
         setPhase((prev) => (prev === next ? prev : next));
@@ -308,6 +321,17 @@ export default function ReelsApp() {
     return taken.backgrounds;
   }
 
+  function assignCopy(count: number, seed: number) {
+    const taken = takeCopy(copyQueueRef.current, count, seed);
+    copyQueueRef.current = taken.queue;
+    const last = taken.copies[taken.copies.length - 1];
+    if (last) {
+      setHookLines(last.hook);
+      setCtaLine(last.cta);
+    }
+    return taken.copies;
+  }
+
   async function previewOne() {
     if (busy) return;
     unlockPreviewAudio();
@@ -325,6 +349,7 @@ export default function ReelsApp() {
       const seed = Math.floor(Math.random() * 1e9) + 1;
       const next = await makeReelMaze(theme, cols, rotation, seed);
       const [background] = assignBackgrounds(1);
+      const [copy] = assignCopy(1, seed);
       setActiveBg(background.name);
       sceneRef.current = {
         maze: next.maze,
@@ -332,9 +357,12 @@ export default function ReelsApp() {
         palette: background,
         subject: next.subject,
         seed: next.seed,
+        hook: copy.hook,
+        cta: copy.cta,
         cache: null,
       };
       setBuilt(next);
+      setPreviewed(true);
       armSoundtrack(sceneRef.current);
       setPlayId((n) => n + 1);
       setPlaying(true);
@@ -362,6 +390,7 @@ export default function ReelsApp() {
       lookRef.current.duration,
       lookRef.current.countdown,
       lookRef.current.endCard,
+      lookRef.current.holdSec,
     ).duration;
     let audio: AudioBuffer | null = null;
     if (volumeRef.current > 0) {
@@ -402,6 +431,7 @@ export default function ReelsApp() {
       lookRef.current.duration,
       lookRef.current.countdown,
       lookRef.current.endCard,
+      lookRef.current.holdSec,
     ).duration;
     setFormatNote(`${result.label} · 1080×1920 · ${seconds}s · 30 fps`);
     return item;
@@ -451,6 +481,7 @@ export default function ReelsApp() {
     themeRef.current = theme;
     const base = Math.floor(Math.random() * 1e9) + 1;
     const backgrounds = assignBackgrounds(count);
+    const copies = assignCopy(count, base);
     const files: SavedReel[] = [];
     try {
       for (let i = 0; i < count; i++) {
@@ -458,13 +489,18 @@ export default function ReelsApp() {
         setProgress(`Video ${i + 1} of ${count} · finding a shape…`);
         const next = await makeReelMaze(theme, cols, i, base + i * 997);
         const pal = backgrounds[i];
+        const copy = copies[i];
         setActiveBg(pal.name);
+        setHookLines(copy.hook);
+        setCtaLine(copy.cta);
         const scene: ReelScene = {
           maze: next.maze,
           route: next.route,
           palette: pal,
           subject: next.subject,
           seed: next.seed,
+          hook: copy.hook,
+          cta: copy.cta,
           cache: null,
         };
         sceneRef.current = scene;
@@ -522,10 +558,11 @@ export default function ReelsApp() {
         </a>
         <h1>Maze Reels Studio</h1>
         <p className="sub">
-          Vertical videos for Instagram. After the countdown the maze stays
-          unsolved so viewers can play along, then a light follows the real
-          solution — red, yellow, green, blue, pink, orange — and never steps
-          into a dead end. Auto gives every reel a new background.
+          Vertical videos for Instagram. Preview the reel first, then download
+          only if you want the file. After the countdown the maze stays unsolved
+          for the wait you set, then a light follows the real solution — red,
+          yellow, green, blue, pink, orange — and never steps into a dead end.
+          Auto gives every reel a different gradient.
         </p>
       </header>
 
@@ -565,8 +602,7 @@ export default function ReelsApp() {
                 className={paletteName === AUTO_BACKGROUND ? 'on' : ''}
                 style={{
                   background:
-                    'conic-gradient(#E7A090, #C98B98, #F0C4A4, #3E8F8A, #B7C0E4, #3E5EA8, #8E5A82, #D4B15C, #C46A4C, #9FCBE0, #8A3850, #E7A090)',
-                  color: '#ffffff',
+                    'conic-gradient(#F3C7AE, #A9D4E6, #C9C6EA, #3E5EA8, #E0C07A, #8E5A82, #5E9E98, #E4A8B6, #F3C7AE)',
                 }}
                 aria-pressed={paletteName === AUTO_BACKGROUND}
                 onClick={() => setPaletteName(AUTO_BACKGROUND)}
@@ -579,7 +615,9 @@ export default function ReelsApp() {
                   key={p.name}
                   type="button"
                   className={p.name === paletteName ? 'on' : ''}
-                  style={{ background: `linear-gradient(160deg, ${p.bg}, ${p.bgEnd})`, color: p.text }}
+                  style={{
+                    background: `linear-gradient(${p.angle}deg, ${p.bg}, ${p.bgMid}, ${p.bgEnd})`,
+                  }}
                   aria-pressed={p.name === paletteName}
                   onClick={() => {
                     setPaletteName(p.name);
@@ -596,8 +634,9 @@ export default function ReelsApp() {
               ))}
             </div>
             <p className="note">
-              Auto is a new saturated background every reel. A batch always
-              uses a different color for each video
+              Every background is a gradient of more than one color. Auto picks a
+              new one each reel and will not repeat the last gradient. A batch
+              uses a different gradient on every video
               {palette ? `, starting from ${palette.name}` : ''}.
             </p>
           </div>
@@ -642,13 +681,28 @@ export default function ReelsApp() {
             />
             <strong>{duration}s</strong>
           </label>
+          <label className="row">
+            <span>Wait</span>
+            <input
+              type="range"
+              min={PLAY_ALONG_MIN}
+              max={PLAY_ALONG_MAX}
+              step={1}
+              value={holdSec}
+              aria-label="Unsolved maze wait"
+              onChange={(e) => setHoldSec(Number(e.target.value))}
+              disabled={busy}
+            />
+            <strong data-wait-seconds={holdSec}>{holdSec}s</strong>
+          </label>
           <p className="note">
             Hook 1s
             {countdown ? ` · countdown ${(timeline.countEnd - timeline.hookEnd).toFixed(0)}s` : ''}
-            {' · '}play along {playAlong.toFixed(0)}s · coloring {coloring.toFixed(1)}s · finish{' '}
+            {' · '}wait {playAlong.toFixed(0)}s · solution {coloring.toFixed(1)}s · finish{' '}
             {(timeline.burstEnd - timeline.walkEnd).toFixed(1)}s
             {endCard ? ` · end card ${(timeline.duration - timeline.burstEnd).toFixed(1)}s` : ''}.
-            The maze stays unsolved through the play-along pause. Shorter length means a faster solution.
+            The unsolved maze stays up for the wait you set ({PLAY_ALONG_MIN}–{PLAY_ALONG_MAX}s),
+            then the real route draws. Dead ends stay empty.
           </p>
 
           <label className="check">
@@ -669,16 +723,18 @@ export default function ReelsApp() {
             />
             End card
           </label>
-          <label className="field">
-            <span>End-card text</span>
-            <input
-              type="text"
-              value={cta}
-              maxLength={90}
-              onChange={(e) => setCta(e.target.value)}
-              disabled={busy || !endCard}
-            />
-          </label>
+          <div className="field">
+            <span>Opening line and closing line</span>
+            <p className="note">
+              Every new reel gets a different hook and a different closing line.
+              The next one will not repeat the lines you just used.
+            </p>
+            {hookLines.length > 0 && (
+              <p className="note" data-reel-hook={hookLines.join(' ')} data-reel-cta={ctaLine}>
+                This reel opens with “{hookLines.join(' ')}” and closes with “{ctaLine}”.
+              </p>
+            )}
+          </div>
           <label className="field">
             <span>
               Handle <em>optional</em>
@@ -739,18 +795,42 @@ export default function ReelsApp() {
           <div className="actions">
             {!busy ? (
               <>
-                <button className="primary" type="button" onClick={() => void previewOne()}>
-                  {built ? 'New maze' : 'Preview'}
-                </button>
-                <button type="button" onClick={replay} disabled={!built}>
-                  Replay
-                </button>
-                <button type="button" onClick={() => void downloadCurrent()} disabled={!built}>
-                  Download this video
-                </button>
-                <button type="button" onClick={() => void downloadBatch()}>
-                  Download {batchCount} video{batchCount === 1 ? '' : 's'}
-                </button>
+                <div className="action-step">
+                  <span className="step-label">Preview</span>
+                  <button
+                    className="primary"
+                    type="button"
+                    data-action="preview"
+                    onClick={() => void previewOne()}
+                  >
+                    {built ? 'Preview new reel' : 'Preview'}
+                  </button>
+                  <button type="button" data-action="replay" onClick={replay} disabled={!built}>
+                    Replay
+                  </button>
+                  <p className="note">
+                    Watch the reel here first. Nothing downloads until you ask.
+                  </p>
+                </div>
+                {previewed && (
+                  <div className="action-step" data-download-step="ready">
+                    <span className="step-label">Download, optional</span>
+                    <button
+                      type="button"
+                      data-action="download"
+                      onClick={() => void downloadCurrent()}
+                      disabled={!built}
+                    >
+                      Download this video
+                    </button>
+                    <button type="button" data-action="download-batch" onClick={() => void downloadBatch()}>
+                      Download {batchCount} video{batchCount === 1 ? '' : 's'}
+                    </button>
+                    <p className="note">
+                      Save this preview, or build a fresh batch. Skip this if the reel is not the one.
+                    </p>
+                  </div>
+                )}
               </>
             ) : (
               <button type="button" onClick={() => activeCancel.current?.()}>

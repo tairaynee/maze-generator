@@ -16,25 +16,31 @@ export const REEL_MIN_SEC = 20;
 export const REEL_MAX_SEC = 30;
 /** How long each of 3, 2, and 1 stays on screen. */
 export const COUNT_BEAT_SEC = 1;
-/**
- * Pause after the countdown, before any of the official path is drawn.
- * Long enough for a person to try the maze.
- */
-export const PLAY_ALONG_SEC = 7;
+/** Unsolved-maze wait after the countdown. The publisher picks this. */
+export const PLAY_ALONG_MIN = 3;
+export const PLAY_ALONG_MAX = 10;
+/** Shorter than the old 7s hold. Still long enough to try the maze. */
+export const PLAY_ALONG_DEFAULT = 4;
+
+export function clampPlayAlong(seconds: number): number {
+  if (!Number.isFinite(seconds)) return PLAY_ALONG_DEFAULT;
+  return Math.min(PLAY_ALONG_MAX, Math.max(PLAY_ALONG_MIN, Math.round(seconds)));
+}
 
 /**
- * Hook, then a one-second-per-beat countdown, then a fixed play-along hold,
- * then the solution. The hold is never trimmed to make the reel shorter.
+ * Hook, then a one-second-per-beat countdown, then the chosen play-along
+ * hold, then the solution. The hold is never trimmed to make the reel shorter.
  */
 export function buildTimeline(
   durationSec: number,
   countdown: boolean,
   endCard: boolean,
+  playAlongSec: number = PLAY_ALONG_DEFAULT,
 ): Timeline {
   let duration = Math.min(REEL_MAX_SEC, Math.max(REEL_MIN_SEC, durationSec));
   const hookEnd = 1;
   const countSpan = countdown ? COUNT_BEAT_SEC * 3 : 0;
-  const holdSpan = PLAY_ALONG_SEC;
+  const holdSpan = clampPlayAlong(playAlongSec);
   const burstSpan = 1.05;
   const minWalk = 4.2;
   let cardSpan = endCard ? Math.min(2.8, duration * 0.22) : 0;

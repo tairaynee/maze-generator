@@ -126,7 +126,11 @@ input[type='text'], select, input[type='number'] {
   border: 1px solid rgba(255, 255, 255, 0.25);
   font-size: 11px;
   font-weight: 700;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  color: #fffaf6;
+  text-shadow:
+    0 0 2px #1c1614,
+    0 0 4px #1c1614,
+    0 1px 2px rgba(0, 0, 0, 0.9);
 }
 
 .swatches button.on {
@@ -163,6 +167,33 @@ input[type='text'], select, input[type='number'] {
 .actions {
   border-top: 1px solid var(--line);
   padding-top: 12px;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.action-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.action-step + .action-step {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.step-label {
+  flex: 1 0 100%;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.action-step .note {
+  flex: 1 0 100%;
 }
 
 button, .file {

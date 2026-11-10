@@ -1,9 +1,11 @@
-// Distinct fields for an Instagram grid. Hues stay saturated, but they
-// sit below fluorescent: coral, rose, apricot, teal, and so on.
-// Marker colors on the solution are separate and a step softer than neon.
+// Soft multi-color gradients for an Instagram grid. Each field blends more
+// than one hue and stays below fluorescent. Marker colors on the solution
+// are separate and a step softer than neon.
 
 export interface Palette {
   name: string;
+  /** Canvas gradient direction, in degrees. */
+  angle: number;
   bg: string;
   bgMid: string;
   bgEnd: string;
@@ -25,18 +27,18 @@ export const MARKER_COLORS = [
 const INK = '#241C18';
 
 export const PALETTES: Palette[] = [
-  { name: 'Coral', bg: '#E7A090', bgMid: '#D98978', bgEnd: '#C46E68', wall: INK, text: INK },
-  { name: 'Rose', bg: '#C98B98', bgMid: '#B87384', bgEnd: '#96586A', wall: INK, text: '#FFFFFF' },
-  { name: 'Apricot', bg: '#F0C4A4', bgMid: '#E4AA80', bgEnd: '#D08A5C', wall: INK, text: INK },
-  { name: 'Teal', bg: '#3E8F8A', bgMid: '#2C736F', bgEnd: '#1C5552', wall: INK, text: '#FFFFFF' },
-  { name: 'Periwinkle', bg: '#B7C0E4', bgMid: '#9AA6D4', bgEnd: '#7C8AB8', wall: INK, text: INK },
-  { name: 'Sage', bg: '#B4C2A6', bgMid: '#96A888', bgEnd: '#738468', wall: INK, text: INK },
-  { name: 'Cobalt', bg: '#3E5EA8', bgMid: '#2E4C90', bgEnd: '#1E366C', wall: INK, text: '#FFFFFF' },
-  { name: 'Plum', bg: '#8E5A82', bgMid: '#734868', bgEnd: '#54344C', wall: INK, text: '#FFFFFF' },
-  { name: 'Mustard', bg: '#D4B15C', bgMid: '#C09A44', bgEnd: '#A07C30', wall: INK, text: INK },
-  { name: 'Terracotta', bg: '#C46A4C', bgMid: '#A8563C', bgEnd: '#8A4030', wall: INK, text: '#FFFFFF' },
-  { name: 'Sky', bg: '#9FCBE0', bgMid: '#7EB4D0', bgEnd: '#5A96B4', wall: INK, text: INK },
-  { name: 'Merlot', bg: '#8A3850', bgMid: '#6C283C', bgEnd: '#4C1828', wall: INK, text: '#FFFFFF' },
+  { name: 'Dawn', angle: 160, bg: '#F3C7AE', bgMid: '#E09AAB', bgEnd: '#C5C0E4', wall: INK, text: INK },
+  { name: 'Lagoon', angle: 18, bg: '#A9D4E6', bgMid: '#6EAEA4', bgEnd: '#E7C7A4', wall: INK, text: INK },
+  { name: 'Dusk', angle: 128, bg: '#C9C6EA', bgMid: '#A56B90', bgEnd: '#D08468', wall: INK, text: INK },
+  { name: 'Harbor', angle: 205, bg: '#8EBFDA', bgMid: '#3E5EA8', bgEnd: '#E7A898', wall: INK, text: '#FFFFFF' },
+  { name: 'Orchard', angle: 72, bg: '#C5D2B4', bgMid: '#F0C09A', bgEnd: '#8E6A92', wall: INK, text: INK },
+  { name: 'Bloom', angle: 175, bg: '#E4A8B6', bgMid: '#F3CDB4', bgEnd: '#5E9E98', wall: INK, text: INK },
+  { name: 'Twilight', angle: 42, bg: '#3E5EA8', bgMid: '#8E5A82', bgEnd: '#E0C07A', wall: INK, text: '#FFFFFF' },
+  { name: 'Mist', angle: 112, bg: '#D5DEF2', bgMid: '#A9D4E6', bgEnd: '#D98978', wall: INK, text: INK },
+  { name: 'Ember', angle: 12, bg: '#D98978', bgMid: '#F3CDB4', bgEnd: '#7E98B0', wall: INK, text: INK },
+  { name: 'Grove', angle: 148, bg: '#5E9E98', bgMid: '#E0C07A', bgEnd: '#E4A8B6', wall: INK, text: INK },
+  { name: 'Velvet', angle: 88, bg: '#8E5A82', bgMid: '#F0C8C0', bgEnd: '#6E92A8', wall: INK, text: '#FFFFFF' },
+  { name: 'Picnic', angle: 198, bg: '#F3CDB4', bgMid: '#B7B4DE', bgEnd: '#8A3850', wall: INK, text: '#FFFFFF' },
 ];
 
 export function paletteByName(name: string): Palette {
