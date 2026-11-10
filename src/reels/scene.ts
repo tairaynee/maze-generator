@@ -37,29 +37,29 @@ export interface ReelLook {
   cover: HTMLImageElement | null;
 }
 
-const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+const FONT = '"Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif';
 
 export function drawSplash(ctx: CanvasRenderingContext2D): void {
   const { width, height } = ctx.canvas;
-  const g = ctx.createLinearGradient(0, 0, 0, height);
-  g.addColorStop(0, '#2c0a3d');
-  g.addColorStop(1, '#0a0a0f');
+  const g = ctx.createLinearGradient(0, 0, width, height);
+  g.addColorStop(0, '#1d4bff');
+  g.addColorStop(0.5, '#6d28ff');
+  g.addColorStop(1, '#ff2f92');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 14;
-  ctx.strokeStyle = '#1a0a24';
-  ctx.fillStyle = '#ffe14a';
-  ctx.font = `900 78px ${FONT}`;
-  ctx.strokeText('Maze Reels', width / 2, height * 0.44);
-  ctx.fillText('Maze Reels', width / 2, height * 0.44);
-  ctx.font = `600 36px ${FONT}`;
-  ctx.lineWidth = 8;
   ctx.fillStyle = '#ffffff';
-  ctx.strokeText('Studio', width / 2, height * 0.5);
-  ctx.fillText('Studio', width / 2, height * 0.5);
+  ctx.shadowColor = 'rgba(0,0,0,0.25)';
+  ctx.shadowBlur = 24;
+  track(ctx, '-0.045em');
+  ctx.font = `620 92px ${FONT}`;
+  ctx.fillText('Maze Reels', width / 2, height * 0.46);
+  track(ctx, '0.18em');
+  ctx.font = `560 28px ${FONT}`;
+  ctx.fillText('STUDIO', width / 2, height * 0.53);
+  track(ctx, '0px');
+  ctx.shadowBlur = 0;
 }
 
 export function drawFrame(
@@ -89,7 +89,7 @@ export function drawFrame(
   const points = track.points.map((p) => ({ x: p.x + layout.mx, y: p.y + layout.my }));
   const placed = placeTrack(points, track.spans);
 
-  const pop = t < 0.45 ? 0.9 + 0.1 * easeOutBack(clamp01(t / 0.4)) : 1;
+  const pop = t < 0.4 ? 0.97 + 0.03 * easeOutCubic(clamp01(t / 0.35)) : 1;
   ctx.save();
   if (pop !== 1) {
     const cx = layout.mx + layout.mw / 2;
@@ -104,8 +104,7 @@ export function drawFrame(
 
   const walkT = walkProgress(t, timeline);
   const dist = walkT * placed.total;
-  strokeTrack(ctx, placed, dist, Math.max(8, layout.cell * 0.62), 'rgba(0,0,0,0.72)', 1.28);
-  strokeTrack(ctx, placed, dist, Math.max(7, layout.cell * 0.56), null, 1);
+  strokeVivid(ctx, placed, dist, Math.max(8, layout.cell * 0.58));
 
   ctx.drawImage(layers.walls, 0, 0);
   drawGates(ctx, scene, layout, t);
@@ -126,14 +125,15 @@ export function drawFrame(
     ctx.scale(pop, pop);
     ctx.translate(-cx, -cy);
   }
-  drawMascot(ctx, head.x, head.y, layout.cell, t, walkT > 0 && walkT < 1);
+  drawBead(ctx, head.x, head.y, layout.cell, colorAt(placed, dist), walkT > 0 && walkT < 1, t);
   ctx.restore();
   drawGateLabels(ctx, scene, layout);
 
-  if (t < timeline.hookEnd + 0.3) {
-    const fade = t <= timeline.hookEnd ? 1 : 1 - (t - timeline.hookEnd) / 0.3;
-    const scale = 0.96 + 0.04 * easeOutCubic(clamp01(t / 0.28));
-    drawHook(ctx, width / 2, 148, fade, scale, palette);
+  if (t < timeline.hookEnd) {
+    const fade =
+      t < timeline.hookEnd - 0.22 ? 1 : 1 - (t - (timeline.hookEnd - 0.22)) / 0.22;
+    const rise = (1 - easeOutCubic(clamp01(t / 0.35))) * 18;
+    drawHook(ctx, width / 2, 168 + rise, fade, palette);
   }
 
   if (look.countdown && t >= timeline.hookEnd && t < timeline.countEnd) {
@@ -205,7 +205,6 @@ function layerCache(
   width: number,
   height: number,
 ): { floor: HTMLCanvasElement; walls: HTMLCanvasElement } {
-  const light = isLight(scene.palette);
   const key = `${scene.palette.name}|${look.countdown ? 1 : 0}|${layout.cell.toFixed(2)}`;
   if (scene.cache?.key === key) return scene.cache;
   const floor = document.createElement('canvas');
@@ -214,7 +213,7 @@ function layerCache(
   const walls = document.createElement('canvas');
   walls.width = width;
   walls.height = height;
-  paintFloor(floor.getContext('2d')!, scene.maze, layout, light);
+  paintFloor(floor.getContext('2d')!, scene.maze, layout);
   paintWalls(walls.getContext('2d')!, scene.maze, layout, scene.palette.wall);
   scene.cache = { key, floor, walls };
   return scene.cache;
@@ -224,10 +223,9 @@ function paintFloor(
   ctx: CanvasRenderingContext2D,
   maze: Maze,
   layout: Layout,
-  light: boolean,
 ): void {
   const { cell, mx, my } = layout;
-  ctx.fillStyle = light ? 'rgba(255,252,245,0.88)' : 'rgba(255,255,255,0.06)';
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
   for (let i = 0; i < maze.cells.length; i++) {
     if (!maze.cells[i]) continue;
     const r = Math.floor(i / maze.cols);
@@ -273,36 +271,37 @@ function paintWalls(
       ctx.lineTo(x + cell, y + cell);
     }
   }
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-  ctx.translate(0, Math.max(2, cell * 0.06));
-  ctx.stroke();
-  ctx.translate(0, -Math.max(2, cell * 0.06));
   ctx.strokeStyle = color;
   ctx.stroke();
 }
 
-function strokeTrack(
+function strokeVivid(
   ctx: CanvasRenderingContext2D,
   placed: Placed,
   dist: number,
   width: number,
-  color: string | null,
-  widthScale: number,
 ): void {
   for (const span of placed.spans) {
     const start = placed.cum[span.from] ?? 0;
     const end = placed.cum[span.to] ?? start;
     if (dist <= start) break;
-    strokeSub(
-      ctx,
-      placed.points,
-      span.from,
-      span.to,
-      Math.min(dist, end) - start,
-      color ?? span.color,
-      width * widthScale,
-    );
+    const local = Math.min(dist, end) - start;
+    ctx.save();
+    ctx.shadowColor = span.color;
+    ctx.shadowBlur = width * 0.7;
+    ctx.globalAlpha = 0.95;
+    strokeSub(ctx, placed.points, span.from, span.to, local, span.color, width);
+    ctx.restore();
+    strokeSub(ctx, placed.points, span.from, span.to, local, 'rgba(255,255,255,0.55)', width * 0.28);
   }
+}
+
+function colorAt(placed: Placed, dist: number): string {
+  for (const span of placed.spans) {
+    const end = placed.cum[span.to] ?? 0;
+    if (dist <= end) return span.color;
+  }
+  return placed.spans[placed.spans.length - 1]?.color ?? MARKER_COLORS[0];
 }
 
 function strokeSub(
@@ -368,13 +367,12 @@ function drawGates(
   layout: Layout,
   t: number,
 ): void {
-  const { maze } = scene;
+  const { maze, palette } = scene;
   const { cell, mx, my } = layout;
   const start = gateScreen(maze, maze.start, maze.startOpen, cell, mx, my);
   const goal = gateScreen(maze, maze.end, maze.endOpen, cell, mx, my);
-  drawDot(ctx, start.x, start.y, cell * 0.28, '#22e06a', '#102018');
-  const throb = 1 + Math.sin(t * 4) * 0.08;
-  drawStar(ctx, goal.x, goal.y, cell * 0.62 * throb, '#ffd24a', '#2a1600');
+  drawRing(ctx, start.x, start.y, cell * 0.34, palette.text, false, t);
+  drawRing(ctx, goal.x, goal.y, cell * 0.46, palette.text, true, t);
 }
 
 function drawGateLabels(
@@ -382,26 +380,12 @@ function drawGateLabels(
   scene: ReelScene,
   layout: Layout,
 ): void {
-  const { maze } = scene;
+  const { maze, palette } = scene;
   const { cell, mx, my } = layout;
   const start = gateScreen(maze, maze.start, maze.startOpen, cell, mx, my);
   const goal = gateScreen(maze, maze.end, maze.endOpen, cell, mx, my);
-  drawPill(
-    ctx,
-    'START',
-    nudge(start, maze.startOpen, cell * 1.7),
-    '#22e06a',
-    '#062014',
-    ctx.canvas,
-  );
-  drawPill(
-    ctx,
-    'GOAL',
-    nudge(goal, maze.endOpen, cell * 2.05),
-    '#ffd24a',
-    '#2a1600',
-    ctx.canvas,
-  );
+  drawTag(ctx, 'Start', nudge(start, maze.startOpen, cell * 1.35), palette.text, ctx.canvas);
+  drawTag(ctx, 'Goal', nudge(goal, maze.endOpen, cell * 1.55), palette.text, ctx.canvas);
 }
 
 function gateScreen(
@@ -428,130 +412,86 @@ function nudge(p: TrackPoint, openDir: number, dist: number): TrackPoint {
   return { x: p.x + ODX[openDir] * dist, y: p.y + ODY[openDir] * dist };
 }
 
-function drawDot(
+function drawRing(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   r: number,
-  fill: string,
-  stroke: string,
+  color: string,
+  glow: boolean,
+  t: number,
 ): void {
+  if (glow) {
+    const pulse = 0.28 + 0.12 * Math.sin(t * 3);
+    const halo = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 2.4);
+    halo.addColorStop(0, withAlpha(color, pulse));
+    halo.addColorStop(1, withAlpha(color, 0));
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.beginPath();
-  ctx.fillStyle = fill;
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = Math.max(3, r * 0.28);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2.5, r * 0.16);
   ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fill();
   ctx.stroke();
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  ctx.arc(x, y, Math.max(2, r * 0.22), 0, Math.PI * 2);
+  ctx.fill();
 }
 
-function drawPill(
+function drawTag(
   ctx: CanvasRenderingContext2D,
   text: string,
   at: TrackPoint,
-  fill: string,
-  ink: string,
+  color: string,
   canvas: HTMLCanvasElement,
 ): void {
-  ctx.font = `800 34px ${FONT}`;
-  const w = ctx.measureText(text).width + 36;
-  const h = 50;
-  const x = Math.min(canvas.width - w / 2 - 16, Math.max(w / 2 + 16, at.x));
-  const y = Math.min(canvas.height - h / 2 - 16, Math.max(h / 2 + 16, at.y));
-  ctx.fillStyle = fill;
-  ctx.strokeStyle = ink;
-  ctx.lineWidth = 4;
-  roundRect(ctx, x - w / 2, y - h / 2, w, h, h / 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = ink;
+  ctx.save();
+  ctx.font = `600 26px ${FONT}`;
+  track(ctx, '0.04em');
+  const w = ctx.measureText(text).width;
+  const x = Math.min(canvas.width - w / 2 - 20, Math.max(w / 2 + 20, at.x));
+  const y = Math.min(canvas.height - 28, Math.max(28, at.y));
+  ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, x, y + 1);
+  ctx.shadowColor = 'rgba(0,0,0,0.28)';
+  ctx.shadowBlur = 10;
+  ctx.fillText(text, x, y);
+  ctx.restore();
 }
 
-function drawStar(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  r: number,
-  fill: string,
-  stroke: string,
-): void {
-  const halo = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 1.8);
-  halo.addColorStop(0, 'rgba(255,210,80,0.55)');
-  halo.addColorStop(1, 'rgba(255,210,80,0)');
-  ctx.fillStyle = halo;
-  ctx.beginPath();
-  ctx.arc(x, y, r * 1.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
-    const rad = i % 2 === 0 ? r : r * 0.46;
-    const px = x + Math.cos(ang) * rad;
-    const py = y + Math.sin(ang) * rad;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = Math.max(3, r * 0.14);
-  ctx.fill();
-  ctx.stroke();
-}
-
-function drawMascot(
+function drawBead(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   cell: number,
-  t: number,
+  color: string,
   walking: boolean,
+  t: number,
 ): void {
-  const r = cell * 0.62;
-  const bob = Math.sin(t * (walking ? 16 : 3)) * cell * (walking ? 0.07 : 0.025);
-  const sway = walking ? Math.sin(t * 16) * 0.12 : 0;
+  const r = cell * 0.36;
+  const bob = Math.sin(t * (walking ? 9 : 2.4)) * cell * (walking ? 0.035 : 0.012);
   ctx.save();
   ctx.translate(x, y + bob);
-  ctx.rotate(sway);
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  const glow = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 2.2);
+  glow.addColorStop(0, withAlpha(color, 0.7));
+  glow.addColorStop(1, withAlpha(color, 0));
+  ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.ellipse(0, r * 0.85, r * 0.7, r * 0.28, 0, 0, Math.PI * 2);
+  ctx.arc(0, 0, r * 2.2, 0, Math.PI * 2);
   ctx.fill();
-  const step = walking ? Math.sin(t * 16) : 0;
-  ctx.fillStyle = '#2a1600';
-  ctx.beginPath();
-  ctx.ellipse(-r * 0.38, r * 0.78, r * 0.22, r * 0.12, step * 0.4, 0, Math.PI * 2);
-  ctx.ellipse(r * 0.38, r * 0.78, r * 0.22, r * 0.12, -step * 0.4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#ffe14a';
-  ctx.strokeStyle = '#2a1600';
-  ctx.lineWidth = Math.max(3, r * 0.16);
+  const sphere = ctx.createRadialGradient(-r * 0.38, -r * 0.42, r * 0.05, 0, 0, r);
+  sphere.addColorStop(0, '#ffffff');
+  sphere.addColorStop(0.42, color);
+  sphere.addColorStop(1, shade(color, 0.62));
+  ctx.fillStyle = sphere;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = '#fff6d4';
-  ctx.beginPath();
-  ctx.ellipse(0, r * 0.28, r * 0.48, r * 0.38, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#2a1600';
-  ctx.beginPath();
-  ctx.arc(-r * 0.28, -r * 0.12, r * 0.12, 0, Math.PI * 2);
-  ctx.arc(r * 0.28, -r * 0.12, r * 0.12, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#ff8a9a';
-  ctx.beginPath();
-  ctx.ellipse(-r * 0.48, r * 0.12, r * 0.12, r * 0.08, 0, 0, Math.PI * 2);
-  ctx.ellipse(r * 0.48, r * 0.12, r * 0.12, r * 0.08, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#2a1600';
-  ctx.lineWidth = Math.max(2, r * 0.1);
-  ctx.beginPath();
-  ctx.arc(0, r * 0.08, r * 0.34, Math.PI * 0.15, Math.PI * 0.85);
-  ctx.stroke();
   ctx.restore();
 }
 
@@ -563,35 +503,23 @@ function drawBurst(
   seed: number,
 ): void {
   ctx.save();
-  ctx.globalAlpha = 0.35 + 0.25 * Math.sin(p * Math.PI);
-  ctx.shadowColor = '#fff6c8';
-  ctx.shadowBlur = cell * (0.7 + p);
-  strokeTrack(ctx, placed, placed.total, Math.max(8, cell * 0.7), '#fff4c4', 1);
+  ctx.globalAlpha = 0.22 * Math.sin(p * Math.PI);
+  strokeVivid(ctx, placed, placed.total, Math.max(10, cell * 0.72));
   ctx.restore();
   const goal = placed.points[placed.points.length - 1];
-  const colors = MARKER_COLORS;
   ctx.save();
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0; i < 18; i++) {
     const n = (seed * 13 + i * 97) % 1000;
-    const ang = (i / 28) * Math.PI * 2 + (n % 50) / 80;
-    const speed = 180 + (n % 160);
+    const ang = (i / 18) * Math.PI * 2 + (n % 40) / 90;
+    const speed = 140 + (n % 120);
     const u = easeOutCubic(p);
     const px = goal.x + Math.cos(ang) * speed * u;
-    const py = goal.y + Math.sin(ang) * speed * u * 0.72 + 280 * p * p;
-    ctx.globalAlpha = Math.max(0, 1 - p * 1.05);
-    ctx.fillStyle = colors[i % colors.length];
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(ang + p * 4);
-    const s = 10 + (n % 12);
-    if (i % 2 === 0) {
-      ctx.beginPath();
-      ctx.arc(0, 0, s * 0.45, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.fillRect(-s / 2, -s * 0.18, s, s * 0.36);
-    }
-    ctx.restore();
+    const py = goal.y + Math.sin(ang) * speed * u * 0.85;
+    ctx.globalAlpha = Math.max(0, 0.9 - p);
+    ctx.fillStyle = MARKER_COLORS[i % MARKER_COLORS.length];
+    ctx.beginPath();
+    ctx.arc(px, py, 5 + (n % 7) * (1 - p * 0.4), 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -601,28 +529,21 @@ function drawHook(
   x: number,
   y: number,
   alpha: number,
-  scale: number,
   palette: Palette,
 ): void {
-  const text = 'Can you solve this?';
+  const lines = ['Can you', 'solve this?'];
   ctx.save();
   ctx.globalAlpha = Math.max(0, alpha);
-  ctx.translate(x, y);
-  ctx.scale(scale, scale);
-  ctx.translate(-x, -y);
-  ctx.font = `900 78px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  const { stroke, shadow } = contrast(palette.text);
-  ctx.lineWidth = 16;
-  ctx.strokeStyle = stroke;
   ctx.fillStyle = palette.text;
-  ctx.shadowColor = shadow;
-  ctx.shadowBlur = 16;
-  ctx.shadowOffsetY = 6;
-  ctx.strokeText(text, x, y);
-  ctx.fillText(text, x, y);
+  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.28)';
+  ctx.shadowBlur = 18;
+  track(ctx, '-0.045em');
+  ctx.font = `640 86px ${FONT}`;
+  lines.forEach((line, i) => {
+    ctx.fillText(line, x, y + i * 92);
+  });
   ctx.restore();
 }
 
@@ -651,22 +572,19 @@ function drawCountdown(
     scale = 1 + k * 0.25;
   }
   const cx = width / 2;
-  const cy = 330;
+  const cy = 390;
   ctx.save();
   ctx.globalAlpha = Math.max(0, alpha);
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
   ctx.translate(-cx, -cy);
-  ctx.font = `900 168px ${FONT}`;
+  ctx.font = `560 210px ${FONT}`;
+  track(ctx, '-0.06em');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 18;
-  ctx.strokeStyle = palette.ctaText;
-  ctx.fillStyle = palette.ctaBg;
-  ctx.shadowColor = 'rgba(0,0,0,0.45)';
-  ctx.shadowBlur = 24;
-  ctx.strokeText(String(digit), cx, cy);
+  ctx.fillStyle = palette.text;
+  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.25)';
+  ctx.shadowBlur = 20;
   ctx.fillText(String(digit), cx, cy);
   ctx.restore();
 }
@@ -679,48 +597,41 @@ function drawEndCard(
   height: number,
   p: number,
 ): void {
-  const scale = 0.92 + 0.08 * easeOutBack(p);
   const cta = look.cta.trim() || 'Follow for a new maze every day';
-  const cardW = 920;
-  ctx.font = `800 52px ${FONT}`;
-  const lines = wrapLines(ctx, cta, cardW - 120);
   const cover = look.cover && look.cover.complete && look.cover.naturalWidth > 0 ? look.cover : null;
-  const imgH = cover ? 460 : 0;
-  const textH = lines.length * 66;
-  const handleH = look.handle.trim() ? 64 : 0;
-  const cardH = 72 + imgH + (cover ? 28 : 0) + textH + handleH;
-  const x = (width - cardW) / 2;
-  const y = Math.max(520, height - cardH - 150);
-  const rise = (1 - p) * 48;
-
   ctx.save();
-  const scrim = ctx.createLinearGradient(0, y - 140, 0, height);
+  ctx.font = `640 72px ${FONT}`;
+  track(ctx, '-0.04em');
+  const lines = wrapLines(ctx, cta, 880);
+  const textH = lines.length * 78;
+  const handle = look.handle.trim();
+  const handleH = handle ? 52 : 0;
+  const imgH = cover ? 520 : 0;
+  const blockH = imgH + (cover ? 36 : 0) + textH + handleH;
+  const y = Math.max(640, height - blockH - 160);
+  const rise = (1 - easeOutCubic(p)) * 36;
+
+  const scrim = ctx.createLinearGradient(0, y - 180, 0, height);
   scrim.addColorStop(0, 'rgba(0,0,0,0)');
-  scrim.addColorStop(0.45, `rgba(0,0,0,${0.35 * p})`);
-  scrim.addColorStop(1, `rgba(0,0,0,${0.62 * p})`);
+  scrim.addColorStop(1, isLight(palette) ? `rgba(255,255,255,${0.28 * p})` : `rgba(0,0,0,${0.28 * p})`);
   ctx.fillStyle = scrim;
-  ctx.fillRect(0, y - 140, width, height - (y - 140));
-  ctx.restore();
+  ctx.fillRect(0, Math.max(0, y - 180), width, height - Math.max(0, y - 180));
 
-  ctx.save();
   ctx.globalAlpha = p;
-  ctx.translate(width / 2, y + cardH / 2 + rise);
-  ctx.scale(scale, scale);
-  ctx.translate(-width / 2, -(y + cardH / 2));
-  ctx.fillStyle = palette.ctaBg;
-  ctx.strokeStyle = contrast(palette.ctaBg).stroke;
-  ctx.lineWidth = 8;
-  roundRect(ctx, x, y, cardW, cardH, 40);
-  ctx.fill();
-  ctx.stroke();
-
-  let cursor = y + 40;
+  ctx.translate(0, rise);
+  let cursor = y;
   if (cover) {
-    const boxX = x + 40;
-    const boxW = cardW - 80;
+    const boxW = 640;
     const boxH = imgH;
+    const boxX = (width - boxW) / 2;
     ctx.save();
-    roundRect(ctx, boxX, cursor, boxW, boxH, 28);
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = 36;
+    ctx.shadowOffsetY = 16;
+    roundRect(ctx, boxX, cursor, boxW, boxH, 36);
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
     ctx.clip();
     const scaleFit = Math.min(boxW / cover.naturalWidth, boxH / cover.naturalHeight);
     const dw = cover.naturalWidth * scaleFit;
@@ -730,19 +641,19 @@ function drawEndCard(
     cursor += boxH + 36;
   }
 
-  ctx.fillStyle = palette.ctaText;
+  ctx.fillStyle = palette.text;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `800 52px ${FONT}`;
+  ctx.shadowColor = isLight(palette) ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 16;
   for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], width / 2, cursor + 33 + i * 66);
+    ctx.fillText(lines[i], width / 2, cursor + 36 + i * 78);
   }
-  cursor += textH;
-  const handle = look.handle.trim();
   if (handle) {
-    ctx.font = `700 36px ${FONT}`;
-    ctx.globalAlpha = p * 0.9;
-    ctx.fillText(handle, width / 2, cursor + 36);
+    track(ctx, '0.08em');
+    ctx.font = `560 28px ${FONT}`;
+    ctx.globalAlpha = p * 0.82;
+    ctx.fillText(handle, width / 2, cursor + textH + 28);
   }
   ctx.restore();
 }
@@ -754,24 +665,17 @@ function drawBackground(
   height: number,
   t: number,
 ): void {
-  const drift = Math.sin(t * 0.5) * 0.04;
-  const g = ctx.createLinearGradient(0, 0, 0, height);
+  const drift = Math.sin(t * 0.35) * 0.03;
+  const g = ctx.createLinearGradient(0, 0, width, height);
   g.addColorStop(0, palette.bg);
-  g.addColorStop(0.55, mix(palette.bg, palette.bgEnd, 0.5 + drift));
+  g.addColorStop(0.48 + drift, palette.bgMid);
   g.addColorStop(1, palette.bgEnd);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
-  const vg = ctx.createRadialGradient(
-    width / 2,
-    height / 2,
-    height * 0.3,
-    width / 2,
-    height / 2,
-    height * 0.72,
-  );
-  vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, 'rgba(0,0,0,0.28)');
-  ctx.fillStyle = vg;
+  const orb = ctx.createRadialGradient(width * 0.15, height * 0.08, 0, width * 0.15, height * 0.08, width * 0.75);
+  orb.addColorStop(0, 'rgba(255,255,255,0.22)');
+  orb.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = orb;
   ctx.fillRect(0, 0, width, height);
 }
 
@@ -828,16 +732,17 @@ function rgb(hex: string): [number, number, number] {
   ];
 }
 
-function contrast(fill: string): { stroke: string; shadow: string } {
-  return lum(fill) > 0.55
-    ? { stroke: '#141018', shadow: 'rgba(0,0,0,0.55)' }
-    : { stroke: '#ffffff', shadow: 'rgba(255,255,255,0.4)' };
+function track(ctx: CanvasRenderingContext2D, spacing: string): void {
+  (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = spacing;
 }
 
-function mix(a: string, b: string, t: number): string {
-  const pa = rgb(a);
-  const pb = rgb(b);
-  const u = Math.max(0, Math.min(1, t));
-  const ch = (i: number) => Math.round(pa[i] + (pb[i] - pa[i]) * u);
-  return `rgb(${ch(0)},${ch(1)},${ch(2)})`;
+function withAlpha(hex: string, alpha: number): string {
+  const [r, g, b] = rgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function shade(hex: string, amount: number): string {
+  const [r, g, b] = rgb(hex);
+  const ch = (v: number) => Math.max(0, Math.min(255, Math.round(v * amount)));
+  return `rgb(${ch(r)},${ch(g)},${ch(b)})`;
 }

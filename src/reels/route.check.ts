@@ -1,7 +1,7 @@
 // Run with: npx esbuild src/reels/route.check.ts --bundle --platform=node --format=esm --outfile=/tmp/route-check.mjs && node /tmp/route-check.mjs
 
 import { generateMaze, edgeKey, type Maze } from '../lib/maze';
-import { MARKER_COLORS } from './palettes';
+import { MARKER_COLORS, PALETTES, takeBackgrounds, type PaletteQueue } from './palettes';
 import {
   assertSolution,
   buildColoredTrack,
@@ -213,6 +213,29 @@ function runEase(): void {
   check(mid > 0.42 && mid < 0.58, `ease should stay near the middle, got ${mid}`);
 }
 
+function runBackgrounds(): void {
+  const empty: PaletteQueue = { items: [], last: null };
+  const first = takeBackgrounds(empty, 8, null, 42);
+  check(first.backgrounds.length === 8, 'batch length');
+  check(new Set(first.backgrounds.map((p) => p.name)).size === 8, 'batch backgrounds repeat');
+  const second = takeBackgrounds(first.queue, 8, null, 99);
+  check(second.backgrounds.length === 8, 'second batch length');
+  check(new Set(second.backgrounds.map((p) => p.name)).size === 8, 'second batch repeats');
+  check(
+    second.backgrounds[0].name !== first.backgrounds[first.backgrounds.length - 1].name,
+    'next reel repeated the previous background',
+  );
+  const pinned = takeBackgrounds(empty, 8, PALETTES[3], 7);
+  check(pinned.backgrounds[0].name === PALETTES[3].name, 'batch did not start from the picked color');
+  check(new Set(pinned.backgrounds.map((p) => p.name)).size === 8, 'pinned batch repeats');
+  const locked = takeBackgrounds(empty, 1, PALETTES[1], 3);
+  check(locked.backgrounds.length === 1 && locked.backgrounds[0].name === 'Magenta', 'locked single');
+  const names = new Set(PALETTES.map((p) => p.name));
+  check(names.size === PALETTES.length, 'palette names are not unique');
+  check(PALETTES.length >= 8, 'not enough backgrounds for a batch of 8');
+}
+
+runBackgrounds();
 runHandMaze();
 runGenerated();
 runSegments();

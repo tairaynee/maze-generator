@@ -4,7 +4,13 @@ import { resetCatalogClaims } from '../lib/shape';
 import { PRIMARY_KEYWORDS } from '../lib/themes';
 import { encodeReel, type EncodeResult } from './encode';
 import { makeReelMaze, type BuiltMaze } from './makeMaze';
-import { PALETTES, paletteByName } from './palettes';
+import {
+  AUTO_BACKGROUND,
+  PALETTES,
+  paletteByName,
+  takeBackgrounds,
+  type PaletteQueue,
+} from './palettes';
 import { routeStats } from './route';
 import {
   drawFrame,
@@ -53,8 +59,8 @@ function downloadBlob(blob: Blob, name: string): void {
 export default function ReelsApp() {
   const [theme, setTheme] = useState('animals');
   const [density, setDensity] = useState<(typeof DENSITIES)[number]['id']>('medium');
-  const [paletteName, setPaletteName] = useState(PALETTES[0].name);
-  const [varyPalettes, setVaryPalettes] = useState(true);
+  const [paletteName, setPaletteName] = useState(AUTO_BACKGROUND);
+  const [activeBg, setActiveBg] = useState('');
   const [duration, setDuration] = useState(14);
   const [countdown, setCountdown] = useState(true);
   const [endCard, setEndCard] = useState(true);
@@ -89,14 +95,15 @@ export default function ReelsApp() {
   const savedRef = useRef<SavedReel[]>([]);
   const activeCancel = useRef<(() => void) | null>(null);
   const busyRef = useRef(false);
-  const paletteRef = useRef(paletteByName(paletteName));
+  const paletteRef = useRef(paletteByName(PALETTES[0].name));
+  const queueRef = useRef<PaletteQueue>({ items: [], last: null });
 
-  const palette = paletteByName(paletteName);
+  const palette = paletteName === AUTO_BACKGROUND ? null : paletteByName(paletteName);
   const cols = DENSITIES.find((d) => d.id === density)?.cols ?? 24;
   const timeline = buildTimeline(duration, countdown, endCard);
 
   lookRef.current = { countdown, endCard, duration, cta, handle, cover };
-  paletteRef.current = palette;
+  if (palette) paletteRef.current = palette;
   busyRef.current = busy;
 
   useEffect(() => {
@@ -124,8 +131,10 @@ export default function ReelsApp() {
     const scene = sceneRef.current;
     const ctx = canvasRef.current?.getContext('2d');
     if (!scene || !ctx) return;
-    scene.palette = paletteRef.current;
-    scene.cache = null;
+    if (paletteName !== AUTO_BACKGROUND) {
+      scene.palette = paletteByName(paletteName);
+      scene.cache = null;
+    }
     drawFrame(ctx, scene, lookRef.current, 0);
   }, [paletteName, countdown]);
 
@@ -141,7 +150,6 @@ export default function ReelsApp() {
       const scene = sceneRef.current;
       const look = lookRef.current;
       if (!scene) return;
-      scene.palette = paletteRef.current;
       const elapsed = (now - t0) / 1000;
       drawFrame(ctx, scene, look, Math.min(look.duration, elapsed));
       if (!alive) return;
@@ -182,6 +190,14 @@ export default function ReelsApp() {
     img.src = url;
   }
 
+  function assignBackgrounds(count: number) {
+    const pin = paletteName === AUTO_BACKGROUND ? null : paletteByName(paletteName);
+    const seed = Math.floor(Math.random() * 1e9) + 1;
+    const taken = takeBackgrounds(queueRef.current, count, pin, seed);
+    queueRef.current = taken.queue;
+    return taken.backgrounds;
+  }
+
   async function previewOne() {
     if (busy) return;
     setBusy(true);
@@ -197,10 +213,12 @@ export default function ReelsApp() {
       const rotation = rotRef.current++;
       const seed = Math.floor(Math.random() * 1e9) + 1;
       const next = await makeReelMaze(theme, cols, rotation, seed);
+      const [background] = assignBackgrounds(1);
+      setActiveBg(background.name);
       sceneRef.current = {
         maze: next.maze,
         route: next.route,
-        palette: paletteRef.current,
+        palette: background,
         subject: next.subject,
         seed: next.seed,
         cache: null,
@@ -267,7 +285,6 @@ export default function ReelsApp() {
     setBusy(true);
     setError('');
     stopPlay();
-    scene.palette = paletteRef.current;
     const signal = new AbortController();
     activeCancel.current = () => signal.abort();
     try {
@@ -305,17 +322,15 @@ export default function ReelsApp() {
     resetCatalogClaims(theme);
     themeRef.current = theme;
     const base = Math.floor(Math.random() * 1e9) + 1;
+    const backgrounds = assignBackgrounds(count);
     const files: SavedReel[] = [];
     try {
       for (let i = 0; i < count; i++) {
         if (cancelRef.current) break;
         setProgress(`Video ${i + 1} of ${count} · finding a shape…`);
         const next = await makeReelMaze(theme, cols, i, base + i * 997);
-        const startPalette = Math.max(
-          0,
-          PALETTES.findIndex((p) => p.name === paletteName),
-        );
-        const pal = varyPalettes ? PALETTES[(startPalette + i) % PALETTES.length] : palette;
+        const pal = backgrounds[i];
+        setActiveBg(pal.name);
         const scene: ReelScene = {
           maze: next.maze,
           route: next.route,
@@ -375,9 +390,9 @@ export default function ReelsApp() {
         </a>
         <h1>Maze Reels Studio</h1>
         <p className="sub">
-          Vertical videos for Instagram. Pick a themed silhouette, then a
-          mascot colors the real solution in marker colors — red, yellow,
-          green, blue, pink, orange — and never steps into a dead end.
+          Vertical videos for Instagram. A light follows the real solution
+          in marker colors — red, yellow, green, blue, pink, orange — and
+          never steps into a dead end. Auto gives every reel a new background.
         </p>
       </header>
 
@@ -412,6 +427,20 @@ export default function ReelsApp() {
           <div className="field">
             <span>Background</span>
             <div className="swatches">
+              <button
+                type="button"
+                className={paletteName === AUTO_BACKGROUND ? 'on' : ''}
+                style={{
+                  background:
+                    'conic-gradient(#1d4bff, #ff2f92, #ffe500, #14d46a, #6d28ff, #00c2ff, #1d4bff)',
+                  color: '#ffffff',
+                }}
+                aria-pressed={paletteName === AUTO_BACKGROUND}
+                onClick={() => setPaletteName(AUTO_BACKGROUND)}
+                disabled={busy}
+              >
+                Auto
+              </button>
               {PALETTES.map((p) => (
                 <button
                   key={p.name}
@@ -419,13 +448,25 @@ export default function ReelsApp() {
                   className={p.name === paletteName ? 'on' : ''}
                   style={{ background: `linear-gradient(160deg, ${p.bg}, ${p.bgEnd})`, color: p.text }}
                   aria-pressed={p.name === paletteName}
-                  onClick={() => setPaletteName(p.name)}
+                  onClick={() => {
+                    setPaletteName(p.name);
+                    setActiveBg(p.name);
+                    if (sceneRef.current) {
+                      sceneRef.current.palette = p;
+                      sceneRef.current.cache = null;
+                    }
+                  }}
                   disabled={busy}
                 >
                   {p.name}
                 </button>
               ))}
             </div>
+            <p className="note">
+              Auto is a new saturated background every reel. A batch always
+              uses a different color for each video
+              {palette ? `, starting from ${palette.name}` : ''}.
+            </p>
           </div>
 
           <label className="row">
@@ -468,16 +509,6 @@ export default function ReelsApp() {
             />
             End card
           </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={varyPalettes}
-              onChange={(e) => setVaryPalettes(e.target.checked)}
-              disabled={busy}
-            />
-            Different background for each video in a batch
-          </label>
-
           <label className="field">
             <span>End-card text</span>
             <input
@@ -576,6 +607,8 @@ export default function ReelsApp() {
           {built && stats && (
             <p className="proof">
               <strong>{titleCase(built.subject)}</strong>
+              {' · '}
+              {activeBg}
               {' · '}
               solution checked, {stats.steps} steps from start to goal
               {stats.deadEnds > 0 ? `, ${stats.deadEnds} dead ends left empty` : ''}.
