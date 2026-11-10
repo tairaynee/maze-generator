@@ -11,7 +11,7 @@ import {
   segmentRoute,
   solutionRoute,
 } from './route';
-import { buildTimeline, easeMarker } from './timeline';
+import { buildTimeline, easeMarker, PLAY_ALONG_SEC } from './timeline';
 
 function check(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -180,7 +180,7 @@ function runSegments(): void {
 
 function runTimeline(): void {
   const combos: Array<[number, boolean, boolean]> = [];
-  for (const d of [10, 14, 20]) {
+  for (const d of [20, 24, 30]) {
     for (const c of [false, true]) {
       for (const e of [false, true]) combos.push([d, c, e]);
     }
@@ -190,13 +190,21 @@ function runTimeline(): void {
     approx(t.duration, d, 'duration');
     approx(t.hookEnd, 1, 'hook');
     check(t.countEnd >= t.hookEnd, 'countdown order');
-    check(t.walkEnd > t.countEnd + 4, 'coloring time');
+    check(t.holdEnd >= t.countEnd, 'hold order');
+    approx(t.holdEnd - t.countEnd, PLAY_ALONG_SEC, 'play-along hold');
+    check(t.holdEnd - t.countEnd >= 6 && t.holdEnd - t.countEnd <= 8, 'hold window');
+    check(t.walkEnd > t.holdEnd + 4, 'coloring starts after the hold');
     check(t.burstEnd > t.walkEnd, 'burst');
     check(t.burstEnd <= t.duration + 1e-6, 'burst inside the reel');
     if (!e) approx(t.burstEnd, t.duration, 'no end card');
     if (!c) approx(t.countEnd, t.hookEnd, 'no countdown');
-    if (c) check(t.countEnd - t.hookEnd >= 0.75, 'countdown too short');
+    if (c) approx(t.countEnd - t.hookEnd, 3, 'countdown is one second per beat');
   }
+  const short = buildTimeline(10, true, true);
+  approx(short.duration, 20, 'short request clamps up');
+  approx(short.holdEnd - short.countEnd, PLAY_ALONG_SEC, 'short reel kept the hold');
+  approx(short.countEnd - short.hookEnd, 3, 'short reel kept the countdown');
+  check(short.walkEnd > short.holdEnd, 'short reel still walks the solution');
 }
 
 function runEase(): void {

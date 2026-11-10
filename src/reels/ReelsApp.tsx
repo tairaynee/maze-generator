@@ -22,7 +22,7 @@ import {
   type ReelLook,
   type ReelScene,
 } from './scene';
-import { buildTimeline } from './timeline';
+import { buildTimeline, REEL_MAX_SEC, REEL_MIN_SEC, reelPhase } from './timeline';
 
 const DENSITIES = [
   { id: 'chunky', label: 'Chunky', cols: 18 },
@@ -63,7 +63,8 @@ export default function ReelsApp() {
   const [density, setDensity] = useState<(typeof DENSITIES)[number]['id']>('medium');
   const [paletteName, setPaletteName] = useState(AUTO_BACKGROUND);
   const [activeBg, setActiveBg] = useState('');
-  const [duration, setDuration] = useState(14);
+  const [duration, setDuration] = useState(24);
+  const [phase, setPhase] = useState('');
   const [countdown, setCountdown] = useState(true);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
@@ -87,7 +88,7 @@ export default function ReelsApp() {
   const lookRef = useRef<ReelLook>({
     countdown: true,
     endCard: true,
-    duration: 14,
+    duration: 24,
     cta: 'Follow for a new maze every day',
     handle: '',
     cover: null,
@@ -103,6 +104,7 @@ export default function ReelsApp() {
   const queueRef = useRef<PaletteQueue>({ items: [], last: null });
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioStopRef = useRef<(() => void) | null>(null);
+  const pendingAudio = useRef<Promise<AudioBuffer | null> | null>(null);
   const volumeRef = useRef(0.8);
 
   const palette = paletteName === AUTO_BACKGROUND ? null : paletteByName(paletteName);
@@ -146,10 +148,45 @@ export default function ReelsApp() {
     drawFrame(ctx, scene, lookRef.current, 0);
   }, [paletteName, countdown]);
 
+  function audioContext(): AudioContext {
+    const Ctx =
+      window.AudioContext ??
+      (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) throw new Error('This browser cannot play Web Audio, so the soundtrack has nowhere to go.');
+    const ac = audioCtxRef.current ?? new Ctx();
+    audioCtxRef.current = ac;
+    return ac;
+  }
+
+  function unlockPreviewAudio(): void {
+    if (volumeRef.current <= 0) return;
+    try {
+      const ac = audioContext();
+      if (ac.state !== 'running') void ac.resume();
+      const silent = ac.createBuffer(1, 1, ac.sampleRate);
+      const src = ac.createBufferSource();
+      src.buffer = silent;
+      src.connect(ac.destination);
+      src.start();
+    } catch {
+      /* the preview effect reports a real failure */
+    }
+  }
+
+  function armSoundtrack(scene: ReelScene): void {
+    const look = lookRef.current;
+    const seconds = buildTimeline(look.duration, look.countdown, look.endCard).duration;
+    pendingAudio.current =
+      volumeRef.current > 0
+        ? renderReelAudio(seconds, reelEvents(scene, look), volumeRef.current)
+        : Promise.resolve(null);
+  }
+
   useEffect(() => {
     if (!playing) {
       audioStopRef.current?.();
       audioStopRef.current = null;
+      setPhase('');
       return;
     }
     const canvas = canvasRef.current;
@@ -159,44 +196,80 @@ export default function ReelsApp() {
     let alive = true;
     const scene = sceneRef.current;
     const look = { ...lookRef.current };
+    const total = buildTimeline(look.duration, look.countdown, look.endCard).duration;
     const level = volumeRef.current;
-    if (scene && level > 0) {
-      void (async () => {
-        const ac = audioCtxRef.current ?? new AudioContext();
-        audioCtxRef.current = ac;
-        if (ac.state === 'suspended') await ac.resume();
-        const buffer = await renderReelAudio(look.duration, reelEvents(scene, look), level);
-        if (!alive) return;
-        const src = ac.createBufferSource();
-        src.buffer = buffer;
-        src.connect(ac.destination);
-        src.start();
-        audioStopRef.current = () => {
-          try {
-            src.stop();
-          } catch {
-            /* already stopped */
-          }
-        };
-      })();
-    }
-    const t0 = performance.now();
-    const tick = (now: number) => {
-      const scene = sceneRef.current;
-      const look = lookRef.current;
-      if (!scene) return;
-      const elapsed = (now - t0) / 1000;
-      drawFrame(ctx, scene, look, Math.min(look.duration, elapsed));
-      if (!alive) return;
-      if (elapsed < look.duration) raf = requestAnimationFrame(tick);
-      else setPlaying(false);
+    const pending = pendingAudio.current;
+    pendingAudio.current = null;
+
+    const stopAudio = () => {
+      audioStopRef.current?.();
+      audioStopRef.current = null;
     };
-    raf = requestAnimationFrame(tick);
+    const startClock = () => {
+      const t0 = performance.now();
+      const tick = (now: number) => {
+        const sceneNow = sceneRef.current;
+        const lookNow = lookRef.current;
+        if (!sceneNow) return;
+        const elapsed = (now - t0) / 1000;
+        const shown = Math.min(total, elapsed);
+        drawFrame(ctx, sceneNow, lookNow, shown);
+        const next = reelPhase(
+          shown,
+          buildTimeline(lookNow.duration, lookNow.countdown, lookNow.endCard),
+          lookNow.countdown,
+        );
+        setPhase((prev) => (prev === next ? prev : next));
+        if (!alive) return;
+        if (elapsed < total) raf = requestAnimationFrame(tick);
+        else setPlaying(false);
+      };
+      raf = requestAnimationFrame(tick);
+    };
+
+    if (scene) drawFrame(ctx, scene, look, 0);
+    void (async () => {
+      try {
+        let buffer: AudioBuffer | null = null;
+        if (pending) buffer = await pending;
+        else if (scene && level > 0) buffer = await renderReelAudio(total, reelEvents(scene, look), level);
+        if (!alive) return;
+        if (buffer) {
+          const ac = audioContext();
+          if (ac.state === 'suspended') await ac.resume();
+          if (!alive) return;
+          if (ac.state === 'suspended') {
+            setError('The browser blocked the soundtrack. Click Preview again to allow sound.');
+          } else {
+            const src = ac.createBufferSource();
+            src.buffer = buffer;
+            src.connect(ac.destination);
+            const stop = () => {
+              try {
+                src.stop();
+              } catch {
+                /* already stopped */
+              }
+            };
+            audioStopRef.current = stop;
+            src.start();
+            if (!alive) {
+              stop();
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        if (!alive) return;
+        setError(err instanceof Error ? err.message : 'Could not play the soundtrack.');
+      }
+      if (alive) startClock();
+    })();
+
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
-      audioStopRef.current?.();
-      audioStopRef.current = null;
+      stopAudio();
     };
   }, [playing, playId]);
 
@@ -237,6 +310,7 @@ export default function ReelsApp() {
 
   async function previewOne() {
     if (busy) return;
+    unlockPreviewAudio();
     setBusy(true);
     setError('');
     setProgress('Finding a themed shape…');
@@ -261,6 +335,7 @@ export default function ReelsApp() {
         cache: null,
       };
       setBuilt(next);
+      armSoundtrack(sceneRef.current);
       setPlayId((n) => n + 1);
       setPlaying(true);
       setProgress('');
@@ -283,21 +358,19 @@ export default function ReelsApp() {
     total: number,
     signal: AbortSignal,
   ): Promise<{ result: EncodeResult; filename: string }> {
+    const seconds = buildTimeline(
+      lookRef.current.duration,
+      lookRef.current.countdown,
+      lookRef.current.endCard,
+    ).duration;
     let audio: AudioBuffer | null = null;
     if (volumeRef.current > 0) {
-      try {
-        audio = await renderReelAudio(
-          lookRef.current.duration,
-          reelEvents(scene, lookRef.current),
-          volumeRef.current,
-        );
-      } catch {
-        audio = null;
-      }
+      setProgress(total > 1 ? `Video ${index} of ${total} · writing soundtrack` : 'Writing soundtrack…');
+      audio = await renderReelAudio(seconds, reelEvents(scene, lookRef.current), volumeRef.current);
     }
     const result = await encodeReel(
       (ctx, t) => drawCurrent(ctx, t, scene),
-      lookRef.current.duration,
+      seconds,
       canvasRef.current,
       (frame, frames) => {
         setProgress(
@@ -325,7 +398,12 @@ export default function ReelsApp() {
       blob: result.blob,
     };
     setSaved((prev) => [...prev, item]);
-    setFormatNote(`${result.label} · 1080×1920 · ${lookRef.current.duration}s · 30 fps`);
+    const seconds = buildTimeline(
+      lookRef.current.duration,
+      lookRef.current.countdown,
+      lookRef.current.endCard,
+    ).duration;
+    setFormatNote(`${result.label} · 1080×1920 · ${seconds}s · 30 fps`);
     return item;
   }
 
@@ -425,12 +503,16 @@ export default function ReelsApp() {
   }
 
   function replay() {
-    if (!sceneRef.current || busy) return;
+    const scene = sceneRef.current;
+    if (!scene || busy) return;
+    unlockPreviewAudio();
+    armSoundtrack(scene);
     setPlayId((n) => n + 1);
     setPlaying(true);
   }
 
-  const coloring = Math.max(0, timeline.walkEnd - timeline.countEnd);
+  const playAlong = Math.max(0, timeline.holdEnd - timeline.countEnd);
+  const coloring = Math.max(0, timeline.walkEnd - timeline.holdEnd);
 
   return (
     <div className="studio">
@@ -440,9 +522,10 @@ export default function ReelsApp() {
         </a>
         <h1>Maze Reels Studio</h1>
         <p className="sub">
-          Vertical videos for Instagram. A light follows the real solution
-          in marker colors — red, yellow, green, blue, pink, orange — and
-          never steps into a dead end. Auto gives every reel a new background.
+          Vertical videos for Instagram. After the countdown the maze stays
+          unsolved so viewers can play along, then a light follows the real
+          solution — red, yellow, green, blue, pink, orange — and never steps
+          into a dead end. Auto gives every reel a new background.
         </p>
       </header>
 
@@ -542,15 +625,16 @@ export default function ReelsApp() {
               onChange={(e) => setMuted(e.target.checked)}
               disabled={busy}
             />
-            Mute. Preview plays the track. Downloads include it when this browser can mux audio.
+            Mute. Preview plays the soundtrack from the Preview click. Downloads
+            are MP4 with AAC audio, which Chrome, Safari, QuickTime, and Instagram can play.
           </label>
 
           <label className="row">
             <span>Length</span>
             <input
               type="range"
-              min={10}
-              max={20}
+              min={REEL_MIN_SEC}
+              max={REEL_MAX_SEC}
               step={1}
               value={duration}
               onChange={(e) => setDuration(Number(e.target.value))}
@@ -560,11 +644,11 @@ export default function ReelsApp() {
           </label>
           <p className="note">
             Hook 1s
-            {countdown ? ` · countdown ${(timeline.countEnd - timeline.hookEnd).toFixed(1)}s` : ''}
-            {' · '}coloring {coloring.toFixed(1)}s · finish{' '}
+            {countdown ? ` · countdown ${(timeline.countEnd - timeline.hookEnd).toFixed(0)}s` : ''}
+            {' · '}play along {playAlong.toFixed(0)}s · coloring {coloring.toFixed(1)}s · finish{' '}
             {(timeline.burstEnd - timeline.walkEnd).toFixed(1)}s
             {endCard ? ` · end card ${(timeline.duration - timeline.burstEnd).toFixed(1)}s` : ''}.
-            Shorter length means a faster coloring.
+            The maze stays unsolved through the play-along pause. Shorter length means a faster solution.
           </p>
 
           <label className="check">
@@ -574,7 +658,7 @@ export default function ReelsApp() {
               onChange={(e) => setCountdown(e.target.checked)}
               disabled={busy}
             />
-            3-2-1 countdown after the hook
+            3-2-1 countdown after the hook, one second each
           </label>
           <label className="check">
             <input
@@ -648,15 +732,15 @@ export default function ReelsApp() {
           </label>
 
           <p className="note">
-            1080×1920 · 30 fps · H.264 MP4 when this browser can encode it,
-            otherwise WebM. Everything stays in the browser.
+            1080×1920 · 30 fps · H.264 and AAC-LC in the MP4. If this browser
+            cannot encode that audio, the download stops instead of saving a silent file.
           </p>
 
           <div className="actions">
             {!busy ? (
               <>
                 <button className="primary" type="button" onClick={() => void previewOne()}>
-                  {built ? 'New maze' : 'Preview maze'}
+                  {built ? 'New maze' : 'Preview'}
                 </button>
                 <button type="button" onClick={replay} disabled={!built}>
                   Replay
@@ -680,6 +764,11 @@ export default function ReelsApp() {
           <div className="phone">
             <canvas ref={canvasRef} width={REEL_W} height={REEL_H} />
           </div>
+          {phase && (
+            <p className="phase" data-reel-phase={phase} aria-live="polite">
+              {phase}
+            </p>
+          )}
           {built && stats && (
             <p className="proof">
               <strong>{titleCase(built.subject)}</strong>
@@ -698,7 +787,11 @@ export default function ReelsApp() {
               {progress}
             </div>
           )}
-          {formatNote && <p className="note center">{formatNote}</p>}
+          {formatNote && (
+            <p className="export-label" data-export-label={formatNote}>
+              {formatNote}
+            </p>
+          )}
         </div>
       </div>
 

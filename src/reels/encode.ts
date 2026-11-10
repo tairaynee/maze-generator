@@ -1,7 +1,10 @@
 import {
+  ALL_FORMATS,
   AudioBufferSource,
+  BlobSource,
   BufferTarget,
   CanvasSource,
+  Input,
   Mp4OutputFormat,
   Output,
   Quality,
@@ -25,32 +28,74 @@ export interface EncodeResult {
 }
 
 const BITRATE = 8_000_000;
+const AAC_BITRATE = 128_000;
+
+/**
+ * AAC-LC in an MP4 is what Chrome, Safari, QuickTime, and Instagram all play.
+ * Opus (or MP3) inside an MP4 is a common reason a file looks silent.
+ */
+const AAC_PROBE = {
+  numberOfChannels: 2,
+  sampleRate: 44100,
+  bitrate: AAC_BITRATE,
+  fullCodecString: 'mp4a.40.2',
+} as const;
+
+class ExportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExportError';
+  }
+}
+
+const AAC_FAILED =
+  'Could not save an MP4 with AAC audio, so nothing was downloaded. A silent file, or one with Opus audio, looks broken in Chrome, Safari, QuickTime, and Instagram.';
 
 function quality(): Quality {
   return new Quality({ bitrate: BITRATE, bitrateMode: 'variable' });
 }
 
-async function firstAudioCodec(
-  kind: 'mp4' | 'webm',
-  audio: AudioBuffer,
-): Promise<AudioCodec | null> {
-  const candidates: AudioCodec[] = kind === 'mp4' ? ['aac', 'mp3', 'opus'] : ['opus', 'vorbis'];
-  for (const codec of candidates) {
-    try {
-      if (
-        await canEncodeAudio(codec, {
-          numberOfChannels: audio.numberOfChannels,
-          sampleRate: audio.sampleRate,
-          bitrate: 128_000,
-        })
-      ) {
-        return codec;
-      }
-    } catch {
-      /* try the next codec */
+let wasmAac: Promise<void> | null = null;
+
+function registerWasmAac(): Promise<void> {
+  if (!wasmAac) {
+    wasmAac = import('@mediabunny/aac-encoder').then(({ registerAacEncoder }) => {
+      registerAacEncoder();
+    });
+  }
+  return wasmAac;
+}
+
+/** Prefer the browser's AAC encoder. Otherwise use the bundled AAC-LC encoder. */
+async function ensureAacEncoder(forceWasm: boolean): Promise<void> {
+  if (forceWasm) {
+    await registerWasmAac();
+    return;
+  }
+  const native = await canEncodeAudio('aac', AAC_PROBE).catch(() => false);
+  if (!native) await registerWasmAac();
+}
+
+function soundtrackAudible(audio: AudioBuffer): boolean {
+  const step = 32;
+  let sum = 0;
+  let n = 0;
+  for (let c = 0; c < audio.numberOfChannels; c++) {
+    const data = audio.getChannelData(c);
+    for (let i = 0; i < data.length; i += step) {
+      const s = data[i];
+      sum += s * s;
+      n++;
     }
   }
-  return null;
+  return n > 0 && Math.sqrt(sum / n) > 0.002;
+}
+
+function rateLabel(rate: number): string {
+  if (rate === 44100) return '44.1 kHz';
+  if (rate === 48000) return '48 kHz';
+  if (rate % 1000 === 0) return `${rate / 1000} kHz`;
+  return `${Math.round(rate)} Hz`;
 }
 
 function isAbort(err: unknown): boolean {
@@ -79,9 +124,44 @@ export async function encodeReel(
   signal?: AbortSignal,
   audio?: AudioBuffer | null,
 ): Promise<EncodeResult> {
+  const soundtrack = audio ?? null;
+  if (soundtrack && !soundtrackAudible(soundtrack)) {
+    throw new ExportError('The soundtrack was silent, so the video was not saved.');
+  }
+  if (soundtrack) {
+    let last: unknown;
+    const h264 = await supports('avc');
+    if (h264) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await ensureAacEncoder(attempt > 0);
+        try {
+          return await encodeWebCodecs(
+            'mp4',
+            'avc',
+            draw,
+            duration,
+            preview,
+            onProgress,
+            signal,
+            soundtrack,
+          );
+        } catch (err) {
+          if (isAbort(err)) throw err;
+          last = err;
+        }
+      }
+    }
+    if (last instanceof ExportError) throw last;
+    const detail = last instanceof Error ? ` ${last.message}` : '';
+    throw new ExportError(
+      h264
+        ? `${AAC_FAILED}${detail}`
+        : `${AAC_FAILED} This browser cannot encode H.264 video.`,
+    );
+  }
   if (await supports('avc')) {
     try {
-      return await encodeWebCodecs('mp4', 'avc', draw, duration, preview, onProgress, signal, audio ?? null);
+      return await encodeWebCodecs('mp4', 'avc', draw, duration, preview, onProgress, signal, null);
     } catch (err) {
       if (isAbort(err)) throw err;
       console.warn('H.264 encode failed, trying WebM', err);
@@ -90,14 +170,14 @@ export async function encodeReel(
   for (const codec of ['vp9', 'vp8'] as const) {
     if (await supports(codec)) {
       try {
-        return await encodeWebCodecs('webm', codec, draw, duration, preview, onProgress, signal, audio ?? null);
+        return await encodeWebCodecs('webm', codec, draw, duration, preview, onProgress, signal, null);
       } catch (err) {
         if (isAbort(err)) throw err;
         console.warn(`${codec} encode failed`, err);
       }
     }
   }
-  return encodeMediaRecorder(draw, duration, preview, onProgress, signal, audio ?? null);
+  return encodeMediaRecorder(draw, duration, preview, onProgress, signal);
 }
 
 async function encodeWebCodecs(
@@ -130,19 +210,25 @@ async function encodeWebCodecs(
     keyFrameInterval: 2,
   });
   output.addVideoTrack(source);
-  const audioCodec = audio ? await firstAudioCodec(kind, audio) : null;
   let audioSource: AudioBufferSource | null = null;
-  if (audio && audioCodec) {
-    audioSource = new AudioBufferSource({ codec: audioCodec, bitrate: 128_000 });
+  if (audio) {
+    if (kind !== 'mp4') {
+      throw new ExportError(AAC_FAILED);
+    }
+    audioSource = new AudioBufferSource({
+      codec: 'aac' satisfies AudioCodec,
+      bitrate: AAC_BITRATE,
+      fullCodecString: 'mp4a.40.2',
+    });
     output.addAudioTrack(audioSource);
   }
   await output.start();
-  if (audioSource && audio) await audioSource.add(audio);
 
   const total = Math.max(1, Math.round(duration * REEL_FPS));
   const frameDur = 1 / REEL_FPS;
   const previewCtx = preview?.getContext('2d') ?? null;
   try {
+    if (audioSource && audio) await audioSource.add(audio);
     for (let i = 0; i < total; i++) {
       if (signal?.aborted) {
         await output.cancel();
@@ -169,22 +255,47 @@ async function encodeWebCodecs(
   if (!target.buffer?.byteLength) throw new Error('Encoder produced an empty file.');
   const poster = canvas.toDataURL('image/jpeg', 0.72);
   const mimeType = kind === 'mp4' ? 'video/mp4' : 'video/webm';
-  const sound = audioSource
-    ? `with music (${audioCodec?.toUpperCase()})`
-    : audio
-      ? 'video only (this browser cannot encode AAC, MP3, or Opus)'
-      : 'silent';
+  const blob = new Blob([target.buffer], { type: mimeType });
   const label =
     kind === 'mp4'
-      ? `MP4 · H.264 · ${sound}`
-      : `WebM · ${codec.toUpperCase()} · ${sound}`;
-  return {
-    blob: new Blob([target.buffer], { type: mimeType }),
-    mimeType,
-    extension: kind,
-    poster,
-    label,
-  };
+      ? await describeMp4(blob, duration, Boolean(audio))
+      : `WebM · ${codec.toUpperCase()} · silent`;
+  return { blob, mimeType, extension: kind, poster, label };
+}
+
+/** Read the file back and refuse anything Instagram or QuickTime would treat as silent. */
+async function describeMp4(blob: Blob, duration: number, withAudio: boolean): Promise<string> {
+  const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
+  try {
+    const video = await input.getPrimaryVideoTrack();
+    const videoCodec = video ? await video.getCodec() : null;
+    const videoName = videoCodec === 'avc' ? 'H.264' : (videoCodec ?? 'video').toUpperCase();
+    if (!withAudio) return `MP4 · ${videoName} · silent`;
+    const track = await input.getPrimaryAudioTrack();
+    if (!track) {
+      throw new ExportError('The encoder wrote a silent MP4, so the file was not saved.');
+    }
+    const codec = await track.getCodec();
+    const param = (await track.getCodecParameterString()) ?? '';
+    const rate = await track.getSampleRate();
+    const channels = await track.getNumberOfChannels();
+    const audioDuration = await input.computeDuration([track]);
+    const aacLc = codec === 'aac' && (param === '' || param.includes('mp4a.40.2'));
+    if (!aacLc) {
+      const found = param || codec || 'missing';
+      throw new ExportError(
+        `The MP4 audio is ${found}, which Safari, QuickTime, and Instagram usually ignore. The file was not saved.`,
+      );
+    }
+    if (!(audioDuration > Math.min(duration, 1) * 0.5)) {
+      throw new ExportError('The audio track is empty, so the file was not saved.');
+    }
+    const ch = channels === 2 ? 'stereo' : channels === 1 ? 'mono' : `${channels} ch`;
+    const coded = param.includes('mp4a.40.2') ? 'AAC-LC (mp4a.40.2)' : 'AAC-LC';
+    return `MP4 · ${videoName} · ${coded} · ${rateLabel(rate)} ${ch}`;
+  } finally {
+    input.dispose();
+  }
 }
 
 function pickRecorder(): { mime: string; extension: 'mp4' | 'webm' } {
@@ -213,7 +324,6 @@ async function encodeMediaRecorder(
   preview: HTMLCanvasElement | null,
   onProgress: (frame: number, total: number) => void,
   signal?: AbortSignal,
-  _audio?: AudioBuffer | null,
 ): Promise<EncodeResult> {
   const canvas = document.createElement('canvas');
   canvas.width = REEL_W;
@@ -276,8 +386,6 @@ async function encodeMediaRecorder(
     mimeType: mime,
     extension,
     poster: canvas.toDataURL('image/jpeg', 0.72),
-    label: h264
-      ? 'MP4 · H.264 · video only'
-      : 'WebM · video only (this browser cannot encode H.264)',
+    label: h264 ? 'MP4 · H.264 · silent' : 'WebM · silent (this browser cannot encode H.264)',
   };
 }
