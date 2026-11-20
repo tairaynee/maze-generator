@@ -35,7 +35,7 @@ export const DEFAULT_THANK_YOU_COPY: ThankYouCopy = {
   review:
     'Please leave an honest review on Amazon.\nYour feedback helps us make better books.',
   freebieTitle: 'Want more puzzles?',
-  freebie: 'Get a free puzzle PDF.\nDM {handle} on Instagram.',
+  freebie: 'Get a free puzzle PDF.\nFollow and DM {handle} on Instagram.',
   instagram: '@iqexploratorium',
   closing: 'Happy puzzling!',
   brand: '@iqexploratorium',
@@ -79,6 +79,8 @@ const PREVIOUS_FREEBIES = new Set([
   'Want more puzzles? DM {handle} on Instagram for a free puzzle PDF.',
   'Want more puzzles? DM @iqexploratorium on Instagram for a free puzzle PDF. No review required.',
   'Want more puzzles? DM @iqexploratorium on Instagram for a free puzzle PDF.',
+  'Get a free puzzle PDF.\nDM {handle} on Instagram.',
+  'Get a free puzzle PDF.\nDM @iqexploratorium on Instagram.',
 ]);
 
 const FROZEN_DEFAULT_COPYRIGHTS = new Set([
@@ -384,10 +386,13 @@ function compose(opts: ComposeOpts): ThankYouLayout {
   const copyrightLines = text.copyright
     ? wrapText(text.copyright, copyrightSize, false, maxW, measure).filter(Boolean)
     : [];
-  const copyrightStep = copyrightSize * 1.42;
-  const copyrightBlock = copyrightLines.length * copyrightStep;
+  const copyrightStep = copyrightSize * 1.38;
+  const copyrightBlock =
+    copyrightLines.length === 0
+      ? 0
+      : copyrightSize * 0.82 + (copyrightLines.length - 1) * copyrightStep + copyrightSize * 0.32;
   const copyrightTop = pageH - margin - copyrightBlock;
-  const brandGap = text.brand && copyrightLines.length ? 0.16 : 0;
+  const brandGap = text.brand && copyrightLines.length ? 0.38 : 0;
   const brandBaseline = text.brand
     ? (copyrightLines.length
         ? copyrightTop - brandGap - brandSize * 0.4

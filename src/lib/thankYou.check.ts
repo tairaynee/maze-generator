@@ -137,12 +137,15 @@ assert(
 );
 assert(resolved.freebieTitle === 'Want more puzzles?', 'freebie heading');
 assert(
-  resolved.freebie === 'Get a free puzzle PDF.\nDM @iqexploratorium on Instagram.',
+  resolved.freebie === 'Get a free puzzle PDF.\nFollow and DM @iqexploratorium on Instagram.',
   'freebie lines',
 );
 assert(!resolved.freebie.toLowerCase().includes('review'), 'free PDF does not mention a review');
 assert(!resolved.review.toLowerCase().includes('pdf'), 'review does not mention the free PDF');
-assert(resolved.freebie.includes('DM @iqexploratorium on Instagram.'), 'free PDF names the handle');
+assert(
+  resolved.freebie.includes('Follow and DM @iqexploratorium on Instagram.'),
+  'free PDF asks to follow and DM',
+);
 assert(resolved.brand === '@iqexploratorium', 'brand is the handle');
 assert(resolved.closing === 'Happy puzzling!', 'closing');
 assert(resolved.copyright.startsWith('Copyright © 2026 IQ EXPLORATORIUM.'), 'copyright year is 2026 today');
@@ -266,9 +269,29 @@ assert(
 );
 assert(linesOf('freebieTitle').join('|') === 'Want more puzzles?', 'freebie heading is one line');
 assert(
-  linesOf('freebie').join('|') === 'Get a free puzzle PDF.|DM @iqexploratorium on Instagram.',
+  linesOf('freebie').join('|') ===
+    'Get a free puzzle PDF.|Follow and DM @iqexploratorium on Instagram.',
   'each freebie sentence is one line',
 );
+const fiveByEight = layoutThankYou({
+  pageW: 5,
+  pageH: 8,
+  copy: DEFAULT_THANK_YOU_COPY,
+  artAspect: ART,
+  measure,
+  now: now2026,
+});
+const brandBottom = Math.max(
+  ...fiveByEight.boxes.filter((box) => box.role === 'brand').map((box) => box.y + box.h),
+);
+const legalTop = Math.min(
+  ...fiveByEight.boxes.filter((box) => box.role === 'copyright').map((box) => box.y),
+);
+assert(legalTop - brandBottom >= 0.3, `copyright sits clear of the handle (${(legalTop - brandBottom).toFixed(2)}in)`);
+const legalBottom = Math.max(
+  ...fiveByEight.boxes.filter((box) => box.role === 'copyright').map((box) => box.y + box.h),
+);
+assert(legalBottom <= 8 - fiveByEight.margin + 0.02, 'copyright stays inside the 5x8 margin');
 assert(
   linesOf('copyright').join('|') ===
     'Copyright © 2026 IQ EXPLORATORIUM.|All rights reserved.|No reproduction or distribution|without prior written permission.',
