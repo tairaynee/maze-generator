@@ -20,11 +20,19 @@ import {
   renderTextPageCanvas,
   replaceMazeBatch,
   IMAGE_INSET_PERCENT,
+  PAGE_INCHES,
   type BookPage,
   type ImageFit,
   type PageSize,
   type SolutionMode,
 } from './lib/book';
+import { applyEndPage, printHandle, printedYear, sanitizeCopy, type ThankYouCopy } from './lib/thankYouLayout';
+import {
+  createThankYouPage,
+  loadEndPageSetting,
+  renderThankYouPage,
+  saveEndPageSetting,
+} from './lib/thankYou';
 import { PRIMARY_KEYWORDS } from './lib/themes';
 
 const LEVELS = [
@@ -54,15 +62,28 @@ function dirBetween(a: number, b: number, cols: number): number {
   return -1;
 }
 
+function insertBeforeEnd(arr: BookPage[], index: number, items: BookPage[]): BookPage[] {
+  const end = arr.findIndex((p) => p.kind === 'thank-you');
+  let at = Math.min(arr.length, Math.max(0, index));
+  if (end >= 0 && at > end) at = end;
+  return [...arr.slice(0, at), ...items, ...arr.slice(at)];
+}
+
 export default function App() {
+  const [initialEnd] = useState(loadEndPageSetting);
   const [keyword, setKeyword] = useState('animals');
   const [level, setLevel] = useState(1);
   const [count, setCount] = useState(30);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
-  const [pages, setPages] = useState<BookPage[]>([]);
+  const [endIncluded, setEndIncluded] = useState(initialEnd.included);
+  const [endCopy, setEndCopy] = useState<ThankYouCopy>(initialEnd.copy);
+  const [pages, setPages] = useState<BookPage[]>(() =>
+    initialEnd.included ? [createThankYouPage(initialEnd.copy)] : [],
+  );
   const [page, setPage] = useState(0);
+  const [endPreview, setEndPreview] = useState('');
   const [solMode, setSolMode] = useState<SolutionMode>('after-each');
   const [pageSize, setPageSize] = useState<PageSize>('6x9');
   const [showSolution, setShowSolution] = useState(false);
@@ -74,6 +95,10 @@ export default function App() {
 
   const shapeSeedRef = useRef(1);
   const usedEverRef = useRef<Set<number>>(new Set());
+  const endIncludedRef = useRef(initialEnd.included);
+  const endCopyRef = useRef(initialEnd.copy);
+  endIncludedRef.current = endIncluded;
+  endCopyRef.current = endCopy;
   const mainRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
@@ -102,6 +127,10 @@ export default function App() {
       if (p.kind === 'text') {
         const title = p.title.trim();
         return title ? `Text — ${title.slice(0, 48)}` : 'Text page';
+      }
+      if (p.kind === 'thank-you') {
+        const title = p.heading.trim();
+        return title ? `Thank you — ${title.slice(0, 42)}` : 'Thank-you page';
       }
       const name = p.name.trim();
       const label = p.role === 'cover' ? 'Cover' : 'Image';
@@ -138,7 +167,11 @@ export default function App() {
         (d, t) =>
           setProgress({ label: 'Generating unique shapes', done: d, total: t }),
       );
-      setPages((prev) => replaceMazeBatch(prev, list));
+      setPages((prev) =>
+        applyEndPage(replaceMazeBatch(prev, list), endIncludedRef.current, () =>
+          createThankYouPage(endCopyRef.current),
+        ),
+      );
       usedEverRef.current = new Set(list.map((b) => b.subjIdx));
       setPage(0);
       resetTrace();
@@ -230,20 +263,37 @@ export default function App() {
   const addText = (where: 'start' | 'after' | 'end') => {
     if (busy) return;
     const item = createTextPage(draftTitle, draftBody);
-    setPages((arr) => {
-      if (where === 'start') return [item, ...arr];
-      if (where === 'end') return [...arr, item];
-      const at = Math.min(arr.length, Math.max(0, page + 1));
-      return [...arr.slice(0, at), item, ...arr.slice(at)];
-    });
-    setPage((p) => {
-      if (where === 'start') return 0;
-      if (where === 'end') return pages.length;
-      return Math.min(pages.length, p + 1);
-    });
+    const index =
+      where === 'start' ? 0 : where === 'end' ? pages.length : Math.min(pages.length, page + 1);
+    const end = pages.findIndex((p) => p.kind === 'thank-you');
+    const at = end >= 0 && index > end ? end : index;
+    setPages((arr) => insertBeforeEnd(arr, index, [item]));
+    setPage(at);
     setDraftTitle('');
     setDraftBody('');
     resetTrace();
+  };
+
+  const setThankYouIncluded = (included: boolean) => {
+    if (busy) return;
+    setEndIncluded(included);
+    endIncludedRef.current = included;
+    saveEndPageSetting({ included, copy: endCopyRef.current });
+    setPages((prev) =>
+      applyEndPage(prev, included, () => createThankYouPage(endCopyRef.current)),
+    );
+    if (included) setPage(100000);
+    resetTrace();
+  };
+
+  const updateThankYou = (patch: Partial<ThankYouCopy>) => {
+    const copy = sanitizeCopy({ ...endCopyRef.current, ...patch });
+    endCopyRef.current = copy;
+    setEndCopy(copy);
+    saveEndPageSetting({ included: true, copy });
+    setPages((arr) =>
+      arr.map((p) => (p.kind === 'thank-you' ? { ...p, ...copy } : p)),
+    );
   };
 
   const updateCurrentText = (patch: { title?: string; body?: string }) => {
@@ -332,12 +382,14 @@ export default function App() {
       if (problems.length) {
         setWarning((w) => [w, problems.join(' ')].filter(Boolean).join(' '));
       }
-      const insertAt =
+      const raw =
         where === 'cover' || where === 'start'
           ? 0
           : where === 'end'
             ? pages.length
             : Math.min(pages.length, Math.max(0, page + 1));
+      const end = pages.findIndex((p) => p.kind === 'thank-you');
+      const insertAt = where === 'cover' ? 0 : end >= 0 && raw > end ? end : raw;
       setPages((arr) => {
         if (where === 'cover') {
           const demoted = arr.map((p) =>
@@ -345,10 +397,9 @@ export default function App() {
           );
           return [...created, ...demoted];
         }
-        if (where === 'start') return [...created, ...arr];
-        if (where === 'end') return [...arr, ...created];
-        const at = Math.min(arr.length, Math.max(0, page + 1));
-        return [...arr.slice(0, at), ...created, ...arr.slice(at)];
+        const index =
+          where === 'start' ? 0 : where === 'end' ? arr.length : Math.min(arr.length, Math.max(0, page + 1));
+        return insertBeforeEnd(arr, index, created);
       });
       setPage(insertAt);
       resetTrace();
@@ -386,6 +437,7 @@ export default function App() {
     if (busy) return;
     const j = page + delta;
     if (j < 0 || j >= pages.length) return;
+    if (pages[page]?.kind === 'thank-you' || pages[j]?.kind === 'thank-you') return;
     setPages((arr) => {
       if (j >= arr.length) return arr;
       const next = arr.slice();
@@ -442,6 +494,24 @@ export default function App() {
     });
     ctx.stroke();
   }, [userPath, solved, maze, cell]);
+
+  useEffect(() => {
+    if (current?.kind !== 'thank-you') return;
+    const sheet = current;
+    let cancel = false;
+    void renderThankYouPage(sheet, PAGE_INCHES[pageSize], 150)
+      .then((canvas) => {
+        if (!cancel) setEndPreview(canvas.toDataURL('image/png'));
+      })
+      .catch((e) => {
+        if (!cancel) {
+          setError(e instanceof Error ? e.message : 'Could not draw the thank-you page.');
+        }
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [current, pageSize]);
 
   const cellAt = useCallback(
     (e: React.PointerEvent): number => {
@@ -526,6 +596,11 @@ export default function App() {
         );
         return;
       }
+      if (current.kind === 'thank-you') {
+        const canvas = await renderThankYouPage(current, PAGE_INCHES[pageSize], 200);
+        download(canvas.toDataURL('image/png'), `${slug}-thank-you.png`);
+        return;
+      }
       if (current.kind === 'image') {
         const canvas = await renderImagePageCanvas(
           current.dataUrl,
@@ -576,8 +651,8 @@ export default function App() {
         <h1>Theme Maze Book Generator</h1>
         <p className="sub">
           One keyword → a whole book of mazes in that shape. Add a cover
-          image, picture pages, or text pages, then export. Free AI art, no
-          sign-up.
+          image, picture pages, or text pages, then export. A thank-you page
+          is included at the end unless you turn it off.
         </p>
       </header>
 
@@ -814,6 +889,193 @@ export default function App() {
           </div>
         </div>
 
+        <div className="text-tools">
+          <h3>End page</h3>
+          {current?.kind === 'thank-you' && (
+            <div className="text-edit">
+              <p className="note">
+                Each line prints as its own sentence. Changes update the
+                preview, the PDF, and the PNG.
+              </p>
+              <label className="field">
+                Heading
+                <input
+                  type="text"
+                  value={current.heading}
+                  onChange={(e) => updateThankYou({ heading: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Intro
+                <input
+                  type="text"
+                  value={current.intro}
+                  onChange={(e) => updateThankYou({ intro: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Review heading
+                <input
+                  type="text"
+                  value={current.reviewTitle}
+                  onChange={(e) => updateThankYou({ reviewTitle: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Review lines
+                <textarea
+                  value={current.review}
+                  rows={3}
+                  onChange={(e) => updateThankYou({ review: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Free puzzle heading
+                <input
+                  type="text"
+                  value={current.freebieTitle}
+                  onChange={(e) => updateThankYou({ freebieTitle: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Free puzzle lines
+                <textarea
+                  value={current.freebie}
+                  rows={3}
+                  onChange={(e) => updateThankYou({ freebie: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Instagram handle
+                <input
+                  type="text"
+                  value={current.instagram}
+                  placeholder="@iqexploratorium"
+                  spellCheck={false}
+                  onChange={(e) => updateThankYou({ instagram: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <p className="note">
+                {'{handle}'} in the free-puzzle note prints as {printHandle(current.instagram)}.
+                The handle is only printed. Nothing is contacted.
+              </p>
+              <label className="field">
+                Closing
+                <input
+                  type="text"
+                  value={current.closing}
+                  onChange={(e) => updateThankYou({ closing: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Brand
+                <input
+                  type="text"
+                  value={current.brand}
+                  placeholder="@iqexploratorium"
+                  onChange={(e) => updateThankYou({ brand: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Copyright year
+                <select
+                  value={current.copyrightYear === 'auto' ? 'auto' : 'fixed'}
+                  onChange={(e) => {
+                    if (e.target.value === 'auto') updateThankYou({ copyrightYear: 'auto' });
+                    else {
+                      const year =
+                        typeof current.copyrightYear === 'number'
+                          ? current.copyrightYear
+                          : new Date().getFullYear();
+                      updateThankYou({ copyrightYear: year });
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  <option value="auto">Auto — current year</option>
+                  <option value="fixed">Fixed year</option>
+                </select>
+              </label>
+              {current.copyrightYear !== 'auto' && (
+                <label className="field">
+                  Fixed year
+                  <input
+                    type="number"
+                    min={1000}
+                    max={9999}
+                    value={current.copyrightYear}
+                    onChange={(e) => {
+                      const year = Number(e.target.value);
+                      if (Number.isInteger(year) && year >= 1000 && year <= 9999) {
+                        updateThankYou({ copyrightYear: year });
+                      }
+                    }}
+                    disabled={busy}
+                  />
+                </label>
+              )}
+              <label className="field">
+                Copyright
+                <textarea
+                  value={current.copyright}
+                  rows={4}
+                  onChange={(e) => updateThankYou({ copyright: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <p className="note">
+                {'{year}'} prints © {printedYear(current.copyrightYear)}. Auto uses the
+                calendar year when you open the generator or export, so next year
+                it prints the new year without an update. A fixed year stays as
+                set. PDFs already downloaded keep the year they were printed with.
+              </p>
+              <div className="row">
+                <button className="danger" onClick={() => setThankYouIncluded(false)} disabled={busy}>
+                  Remove thank-you page
+                </button>
+              </div>
+            </div>
+          )}
+          <p className="note">
+            Included at the end of a new book. The review note and the free
+            PDF note are separate invitations — the free PDF does not ask for
+            a review. Wording stays inside the trim margin. Removing the page
+            is remembered in this browser, and generating again will not add
+            a second copy.
+          </p>
+          <label className="chk end-toggle">
+            <input
+              type="checkbox"
+              checked={endIncluded}
+              disabled={busy}
+              onChange={(e) => setThankYouIncluded(e.target.checked)}
+            />
+            Include thank-you page at the end
+          </label>
+          {endIncluded && current?.kind !== 'thank-you' && (
+            <div className="row">
+              <button
+                disabled={busy}
+                onClick={() => {
+                  const i = pages.findIndex((p) => p.kind === 'thank-you');
+                  if (i >= 0) goTo(i);
+                }}
+              >
+                Edit thank-you page
+              </button>
+            </div>
+          )}
+        </div>
+
         {pages.length > 0 && (
           <div className="row actions">
             {mazes.length > 0 && (
@@ -926,7 +1188,15 @@ export default function App() {
             <button onClick={() => flip(-1)} disabled={page === 0 || busy}>
               ‹ Prev
             </button>
-            <button onClick={() => movePage(-1)} disabled={page === 0 || busy}>
+            <button
+              onClick={() => movePage(-1)}
+              disabled={
+                page === 0 ||
+                busy ||
+                current.kind === 'thank-you' ||
+                pages[page - 1]?.kind === 'thank-you'
+              }
+            >
               Move earlier
             </button>
             <span>
@@ -948,7 +1218,12 @@ export default function App() {
             </label>
             <button
               onClick={() => movePage(1)}
-              disabled={page >= pages.length - 1 || busy}
+              disabled={
+                page >= pages.length - 1 ||
+                busy ||
+                current.kind === 'thank-you' ||
+                pages[page + 1]?.kind === 'thank-you'
+              }
             >
               Move later
             </button>
@@ -966,7 +1241,9 @@ export default function App() {
                   ? 'page-frame text-sheet'
                   : current.kind === 'image'
                     ? 'page-frame image-sheet'
-                    : 'page-frame'
+                    : current.kind === 'thank-you'
+                      ? 'page-frame thankyou-sheet'
+                      : 'page-frame'
               }
               style={{ aspectRatio: pageAspectRatio(pageSize) }}
             >
@@ -1012,6 +1289,12 @@ export default function App() {
                 >
                   <img src={current.dataUrl} alt={current.name} />
                 </div>
+              ) : current.kind === 'thank-you' ? (
+                endPreview ? (
+                  <img src={endPreview} alt="Thank-you page" />
+                ) : (
+                  <p className="text-sheet-empty">Drawing the thank-you page…</p>
+                )
               ) : (
                 <div className="text-sheet-inner">
                   {current.title.trim() ? (
@@ -1032,6 +1315,12 @@ export default function App() {
           <div className={'status' + (solved && onMaze ? ' win' : '')}>
             {current.kind === 'text' ? (
               <>Text page · included in the PDF and the PNG zip.</>
+            ) : current.kind === 'thank-you' ? (
+              <>
+                Thank-you page · last page of the PDF, after the solutions
+                when those are grouped at the back. Included in the PNG zip
+                as end-page/thank-you.png.
+              </>
             ) : current.kind === 'image' ? (
               current.role === 'cover' && page === 0 ? (
                 <>

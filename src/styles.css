@@ -349,6 +349,8 @@ canvas.overlay {
 }
 
 .field input[type='text'],
+.field input[type='number'],
+.field select,
 .field textarea {
   width: 100%;
   background: #0c1326;
@@ -361,6 +363,8 @@ canvas.overlay {
 }
 
 .text-edit .field input[type='text'],
+.text-edit .field input[type='number'],
+.text-edit .field select,
 .text-edit .field textarea {
   background: #121a30;
 }
@@ -370,6 +374,8 @@ canvas.overlay {
 }
 
 .field input[type='text']:focus,
+.field input[type='number']:focus,
+.field select:focus,
 .field textarea:focus {
   border-color: var(--accent);
   outline: none;
@@ -425,6 +431,28 @@ button.danger:hover {
   text-align: center;
   color: #8a8175;
   font-size: 14px;
+}
+
+.page-frame.thankyou-sheet {
+  background: #fff;
+  padding: 0;
+  overflow: hidden;
+}
+
+.thankyou-sheet img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.chk.end-toggle {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .page-frame.image-sheet {

@@ -5,6 +5,8 @@ import { renderToCanvas } from './render';
 import { fetchMarkers, type Markers } from './markers';
 import { fetchSilhouette, maskGrid, resetCatalogClaims } from './shape';
 import { baseSubjectFor, displaySubjectFor, subjectFor } from './themes';
+import { countExportSteps, type ThankYouCopy } from './thankYouLayout';
+import { renderThankYouPage } from './thankYou';
 
 export type SolutionMode = 'after-each' | 'at-end';
 export type PageSize = 'a4' | '5x8' | '6x9';
@@ -51,6 +53,11 @@ export const IMAGE_INSET_PERCENT = 7;
 const PAGE_PAPER = '#fbf7f0';
 const PAGE_PAPER_RGB = { r: 251, g: 247, b: 240 } as const;
 
+/** Closing page: editable copy, pale maze ground, and the pinky-promise drawing. */
+export interface ThankYouPage extends ThankYouCopy {
+  id: string;
+}
+
 /** An uploaded picture used as its own book page (cover or interior). */
 export interface ImagePage {
   id: string;
@@ -70,7 +77,8 @@ export interface ImagePage {
 export type BookPage =
   | { kind: 'maze'; id: string; maze: BookMaze }
   | ({ kind: 'text' } & TextPage)
-  | ({ kind: 'image' } & ImagePage);
+  | ({ kind: 'image' } & ImagePage)
+  | ({ kind: 'thank-you' } & ThankYouPage);
 
 interface BuildOpts {
   skipAI?: boolean;
@@ -372,7 +380,7 @@ const PAGE_FORMATS: Record<PageSize, 'a4' | [number, number]> = {
 };
 
 /** Trim size in inches. A4 uses the exact 210×297 mm sheet. */
-const PAGE_INCHES: Record<PageSize, { w: number; h: number }> = {
+export const PAGE_INCHES: Record<PageSize, { w: number; h: number }> = {
   a4: { w: 210 / 25.4, h: 297 / 25.4 },
   '5x8': { w: 5, h: 8 },
   '6x9': { w: 6, h: 9 },
@@ -812,14 +820,14 @@ function isLeadCover(pages: BookPage[]): boolean {
   return !!first && first.kind === 'image' && first.role === 'cover';
 }
 
-export async function exportBookPdf(
+export async function buildBookPdf(
   pages: BookPage[],
   keyword: string,
   mode: SolutionMode,
   pageSize: PageSize,
   onProgress: (done: number, total: number) => void,
-) {
-  if (!pages.length) return;
+): Promise<jsPDF | null> {
+  if (!pages.length) return null;
   const pdf = new jsPDF({
     orientation: 'portrait',
     unit: 'pt',
@@ -832,6 +840,7 @@ export async function exportBookPdf(
   const mazeCount = pages.filter((p) => p.kind === 'maze').length;
   const textCount = pages.filter((p) => p.kind === 'text').length;
   const imageCount = pages.filter((p) => p.kind === 'image').length;
+  const thankCount = pages.filter((p) => p.kind === 'thank-you').length;
   // A cover image left on page 1 replaces the generated title page.
   const leadCover = isLeadCover(pages);
 
@@ -848,6 +857,7 @@ export async function exportBookPdf(
     if (mazeCount) coverBits.push(`${mazeCount} puzzle${mazeCount === 1 ? '' : 's'}`);
     if (textCount) coverBits.push(`${textCount} text page${textCount === 1 ? '' : 's'}`);
     if (imageCount) coverBits.push(`${imageCount} image page${imageCount === 1 ? '' : 's'}`);
+    if (thankCount) coverBits.push('thank-you page');
     if (mazeCount) {
       coverBits.push(
         `solutions ${mode === 'after-each' ? 'after each maze' : 'at the back'}`,
@@ -863,9 +873,9 @@ export async function exportBookPdf(
   }
 
   // after-each counts one step per maze (the solution is part of that step).
-  // at-end counts maze pages and solution pages separately. Text and image pages count once.
-  const total =
-    (mode === 'after-each' ? mazeCount : mazeCount * 2) + textCount + imageCount;
+  // at-end counts maze pages and solution pages separately. Text, image, and
+  // the thank-you page each count once.
+  const total = countExportSteps(pages, mode);
   let done = 0;
   let step = 0;
 
@@ -880,7 +890,12 @@ export async function exportBookPdf(
     pdf.addPage(fmt, 'portrait');
   };
 
-  for (const item of pages) {
+  // The closing page is printed after solutions when those are grouped at
+  // the back, so it stays the last sheet of the book.
+  const flow = pages.filter((p) => p.kind !== 'thank-you');
+  const closing = pages.filter((p) => p.kind === 'thank-you');
+
+  for (const item of flow) {
     if (item.kind === 'text') {
       ensurePage();
       placeTextPage(pdf, item.title, item.body);
@@ -927,7 +942,26 @@ export async function exportBookPdf(
     }
   }
 
-  pdf.save(`${slugify(keyword)}-maze-book-${pageSize}.pdf`);
+  for (const item of closing) {
+    ensurePage();
+    const sheet = await renderThankYouPage(item, PAGE_INCHES[pageSize], 220);
+    pdf.addImage(sheet.toDataURL('image/png'), 'PNG', 0, 0, pw, ph, undefined, 'FAST');
+    done++;
+    onProgress(done, total);
+  }
+
+  return pdf;
+}
+
+export async function exportBookPdf(
+  pages: BookPage[],
+  keyword: string,
+  mode: SolutionMode,
+  pageSize: PageSize,
+  onProgress: (done: number, total: number) => void,
+) {
+  const pdf = await buildBookPdf(pages, keyword, mode, pageSize, onProgress);
+  if (pdf) pdf.save(`${slugify(keyword)}-maze-book-${pageSize}.pdf`);
 }
 
 export async function exportBookZip(
@@ -941,6 +975,7 @@ export async function exportBookZip(
   const solDir = zip.folder('solutions')!;
   const textDir = zip.folder('text-pages')!;
   const imageDir = zip.folder('image-pages')!;
+  const endDir = zip.folder('end-page')!;
   const pad = (n: number) => String(n).padStart(3, '0');
   const CELL = 22;
   const total = Math.max(1, pages.length);
@@ -976,6 +1011,11 @@ export async function exportBookZip(
         imageNo++;
         imageDir.file(`image-${pad(imageNo)}.png`, png, { base64: true });
       }
+    } else if (item.kind === 'thank-you') {
+      const png = (await renderThankYouPage(item, PAGE_INCHES[pageSize], 200))
+        .toDataURL('image/png')
+        .split(',')[1];
+      endDir.file('thank-you.png', png, { base64: true });
     } else {
       mazeNo++;
       const { maze, markers } = item.maze;
@@ -998,4 +1038,5 @@ export async function exportBookZip(
     compression: 'DEFLATE',
   });
   saveBlob(blob, `${slugify(keyword)}-maze-book.zip`);
+  return blob;
 }
