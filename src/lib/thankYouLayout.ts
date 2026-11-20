@@ -4,8 +4,13 @@
 export interface ThankYouCopy {
   heading: string;
   intro: string;
+  /** Section heading above the review lines. Empty hides it. */
+  reviewTitle: string;
+  /** One sentence per line. */
   review: string;
-  /** `{handle}` is replaced with the printed Instagram handle. */
+  /** Section heading above the free-PDF lines. Empty hides it. */
+  freebieTitle: string;
+  /** One sentence per line. `{handle}` prints the Instagram handle. */
   freebie: string;
   instagram: string;
   closing: string;
@@ -25,23 +30,26 @@ export const PREVIOUS_DEFAULT_BRAND = 'iq exploratorium';
 
 export const DEFAULT_THANK_YOU_COPY: ThankYouCopy = {
   heading: 'Thank you for exploring!',
-  intro: 'We hope you had a great time solving these puzzles!',
+  intro: 'We hope you enjoyed these puzzles!',
+  reviewTitle: 'Enjoyed the puzzles?',
   review:
-    'Enjoyed the puzzles? Please consider leaving an honest review on Amazon. Your feedback helps us create better puzzle books!',
-  freebie:
-    'Want more puzzles? DM {handle} on Instagram for a free puzzle PDF. No review required.',
+    'Please leave an honest review on Amazon.\nYour feedback helps us make better books.',
+  freebieTitle: 'Want more puzzles?',
+  freebie: 'Get a free puzzle PDF.\nDM {handle} on Instagram.',
   instagram: '@iqexploratorium',
   closing: 'Happy puzzling!',
   brand: '@iqexploratorium',
   copyright:
-    'Copyright © {year} IQ EXPLORATORIUM (https://m.youtube.com/@iqexploratorium). All rights reserved. No part of this puzzle book may be reproduced or distributed without prior written permission.',
+    'Copyright © {year} IQ EXPLORATORIUM.\nAll rights reserved.\nNo reproduction or distribution\nwithout prior written permission.',
   copyrightYear: 'auto',
 };
 
 const LIMITS: Record<Exclude<keyof ThankYouCopy, 'copyrightYear'>, number> = {
   heading: 160,
-  intro: 700,
+  intro: 160,
+  reviewTitle: 80,
   review: 700,
+  freebieTitle: 80,
   freebie: 700,
   instagram: 40,
   closing: 120,
@@ -54,7 +62,32 @@ function frozenDefaultCopyright(year: number): string {
   return DEFAULT_THANK_YOU_COPY.copyright.split('{year}').join(String(year));
 }
 
+/** Earlier default that included the YouTube address in parentheses. */
+const PREVIOUS_URL_COPYRIGHT =
+  'Copyright © {year} IQ EXPLORATORIUM (https://m.youtube.com/@iqexploratorium). All rights reserved. No part of this puzzle book may be reproduced or distributed without prior written permission.';
+
+/** Single-sentence notice from before each line was set on purpose. */
+const PREVIOUS_PLAIN_COPYRIGHT =
+  'Copyright © {year} IQ EXPLORATORIUM. All rights reserved. No part of this puzzle book may be reproduced or distributed without prior written permission.';
+
+const PREVIOUS_REVIEWS = new Set([
+  'Enjoyed the puzzles? Please consider leaving an honest review on Amazon. Your feedback helps us create better puzzle books!',
+]);
+
+const PREVIOUS_FREEBIES = new Set([
+  'Want more puzzles? DM {handle} on Instagram for a free puzzle PDF. No review required.',
+  'Want more puzzles? DM {handle} on Instagram for a free puzzle PDF.',
+  'Want more puzzles? DM @iqexploratorium on Instagram for a free puzzle PDF. No review required.',
+  'Want more puzzles? DM @iqexploratorium on Instagram for a free puzzle PDF.',
+]);
+
 const FROZEN_DEFAULT_COPYRIGHTS = new Set([
+  PREVIOUS_URL_COPYRIGHT,
+  PREVIOUS_URL_COPYRIGHT.split('{year}').join('2025'),
+  PREVIOUS_URL_COPYRIGHT.split('{year}').join('2026'),
+  PREVIOUS_PLAIN_COPYRIGHT,
+  PREVIOUS_PLAIN_COPYRIGHT.split('{year}').join('2025'),
+  PREVIOUS_PLAIN_COPYRIGHT.split('{year}').join('2026'),
   frozenDefaultCopyright(2025),
   frozenDefaultCopyright(2026),
 ]);
@@ -83,7 +116,9 @@ export function sanitizeCopy(input: Partial<ThankYouCopy> | null | undefined): T
   return {
     heading: str('heading'),
     intro: str('intro'),
+    reviewTitle: str('reviewTitle'),
     review: str('review'),
+    freebieTitle: str('freebieTitle'),
     freebie: str('freebie'),
     instagram: str('instagram'),
     closing: str('closing'),
@@ -110,6 +145,34 @@ export function migrateStoredCopy(input: Partial<ThankYouCopy> | null | undefine
     changed = true;
   }
 
+  const oldReview = typeof input.review === 'string' ? input.review.trim() : '';
+  if (typeof input.review !== 'string') {
+    copy.reviewTitle = DEFAULT_THANK_YOU_COPY.reviewTitle;
+    copy.review = DEFAULT_THANK_YOU_COPY.review;
+    changed = true;
+  } else if (PREVIOUS_REVIEWS.has(oldReview)) {
+    copy.reviewTitle = DEFAULT_THANK_YOU_COPY.reviewTitle;
+    copy.review = DEFAULT_THANK_YOU_COPY.review;
+    changed = true;
+  } else if (typeof input.reviewTitle !== 'string') {
+    copy.reviewTitle = '';
+    changed = true;
+  }
+
+  const oldFreebie = typeof input.freebie === 'string' ? input.freebie.trim() : '';
+  if (typeof input.freebie !== 'string') {
+    copy.freebieTitle = DEFAULT_THANK_YOU_COPY.freebieTitle;
+    copy.freebie = DEFAULT_THANK_YOU_COPY.freebie;
+    changed = true;
+  } else if (PREVIOUS_FREEBIES.has(oldFreebie)) {
+    copy.freebieTitle = DEFAULT_THANK_YOU_COPY.freebieTitle;
+    copy.freebie = DEFAULT_THANK_YOU_COPY.freebie;
+    changed = true;
+  } else if (typeof input.freebieTitle !== 'string') {
+    copy.freebieTitle = '';
+    changed = true;
+  }
+
   if (input.copyrightYear == null) {
     copy.copyrightYear = 'auto';
     changed = true;
@@ -121,10 +184,7 @@ export function migrateStoredCopy(input: Partial<ThankYouCopy> | null | undefine
     copy.copyright = DEFAULT_THANK_YOU_COPY.copyright;
     copy.copyrightYear = 'auto';
     changed = true;
-  } else if (
-    copy.copyrightYear === 'auto' &&
-    FROZEN_DEFAULT_COPYRIGHTS.has(input.copyright.trim())
-  ) {
+  } else if (FROZEN_DEFAULT_COPYRIGHTS.has(input.copyright.trim())) {
     copy.copyright = DEFAULT_THANK_YOU_COPY.copyright;
     changed = true;
   }
@@ -147,7 +207,9 @@ export function printHandle(raw: string): string {
 export interface ResolvedThankYou {
   heading: string;
   intro: string;
+  reviewTitle: string;
   review: string;
+  freebieTitle: string;
   freebie: string;
   closing: string;
   brand: string;
@@ -160,7 +222,9 @@ export function resolveThankYouText(copy: ThankYouCopy, now: Date = new Date()):
   return {
     heading: copy.heading.trim(),
     intro: copy.intro.trim(),
+    reviewTitle: copy.reviewTitle.trim(),
     review: copy.review.trim(),
+    freebieTitle: copy.freebieTitle.trim(),
     freebie: copy.freebie.split('{handle}').join(handle).trim(),
     closing: copy.closing.trim(),
     brand: copy.brand.trim(),
@@ -181,7 +245,9 @@ export interface LaidBox {
 export type ThankYouRole =
   | 'heading'
   | 'intro'
+  | 'reviewTitle'
   | 'review'
+  | 'freebieTitle'
   | 'freebie'
   | 'closing'
   | 'brand'
@@ -279,10 +345,11 @@ function compose(opts: ComposeOpts): ThankYouLayout {
   const { pageW, pageH, text, artAspect, measure, scale, topFrac, clip } = opts;
   const margin = Math.max(0.48, pageW * 0.1);
   const maxW = Math.max(0.5, pageW - margin * 2);
-  const heading = clamp(pageW * 0.046, 0.2, 0.36) * scale;
-  const body = clamp(pageW * 0.028, 0.145, 0.175) * scale;
-  const closingSize = clamp(pageW * 0.038, 0.175, 0.28) * scale;
-  const brandSize = clamp(pageW * 0.032, 0.155, 0.23) * scale;
+  const heading = clamp(pageW * 0.048, 0.22, 0.34) * scale;
+  const section = clamp(pageW * 0.034, 0.17, 0.21) * scale;
+  const body = clamp(pageW * 0.03, 0.155, 0.175) * scale;
+  const closingSize = clamp(pageW * 0.036, 0.18, 0.24) * scale;
+  const brandSize = clamp(pageW * 0.032, 0.16, 0.22) * scale;
   const textTop = Math.max(margin, pageH * topFrac);
 
   const blocks: Array<{
@@ -301,20 +368,23 @@ function compose(opts: ComposeOpts): ThankYouLayout {
   ) => {
     if (value) blocks.push({ role, text: value, size, bold, gapAfter });
   };
-  push('heading', text.heading, heading, true, heading * 0.55);
-  push('intro', text.intro, body, false, body * 0.9);
-  push('review', text.review, body, true, body * 0.38);
-  push('freebie', text.freebie, body, false, body * 1.05);
+  push('heading', text.heading, heading, true, heading * 0.42);
+  push('intro', text.intro, body, false, body * 1.35);
+  push('reviewTitle', text.reviewTitle, section, true, section * 0.2);
+  push('review', text.review, body, false, body * 1.05);
+  push('freebieTitle', text.freebieTitle, section, true, section * 0.2);
+  push('freebie', text.freebie, body, false, body * 1.15);
   push('closing', text.closing, closingSize, true, 0);
 
-  const showRule = Boolean(text.review && text.freebie);
-  // Keep the legal line near 7.5–9 pt. It should not shrink with the
-  // headline when a long page scales down.
-  const copyrightSize = clamp(pageW * 0.019, 0.105, 0.128) * (0.92 + 0.08 * scale);
+  const showRule = Boolean(
+    (text.reviewTitle || text.review) && (text.freebieTitle || text.freebie),
+  );
+  // Short legal lines stay near 9 pt. They do not shrink with the headings.
+  const copyrightSize = clamp(pageW * 0.024, 0.12, 0.145);
   const copyrightLines = text.copyright
     ? wrapText(text.copyright, copyrightSize, false, maxW, measure).filter(Boolean)
     : [];
-  const copyrightStep = copyrightSize * 1.48;
+  const copyrightStep = copyrightSize * 1.42;
   const copyrightBlock = copyrightLines.length * copyrightStep;
   const copyrightTop = pageH - margin - copyrightBlock;
   const brandGap = text.brand && copyrightLines.length ? 0.16 : 0;
@@ -362,14 +432,17 @@ function compose(opts: ComposeOpts): ThankYouLayout {
         size: block.size,
         bold: block.bold,
       });
-      cursor = bottom + block.size * 0.2;
+      cursor = bottom + block.size * 0.38;
     }
     if (clipped) break;
     const next = blocks[i + 1];
-    if (showRule && block.role === 'review' && next?.role === 'freebie') {
-      cursor += block.size * 0.55;
+    const reviewEnds =
+      block.role === 'review' || (block.role === 'reviewTitle' && next?.role !== 'review');
+    const freebieStarts = next?.role === 'freebieTitle' || next?.role === 'freebie';
+    if (showRule && reviewEnds && freebieStarts) {
+      cursor += Math.max(0.18, block.size * 0.7);
       ruleY = cursor;
-      cursor += block.size * 0.85;
+      cursor += Math.max(0.2, block.size * 0.85);
     } else {
       cursor += block.gapAfter;
     }

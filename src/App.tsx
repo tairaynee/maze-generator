@@ -894,8 +894,8 @@ export default function App() {
           {current?.kind === 'thank-you' && (
             <div className="text-edit">
               <p className="note">
-                Editing the thank-you page. Changes update the preview, the
-                PDF, and the PNG.
+                Each line prints as its own sentence. Changes update the
+                preview, the PDF, and the PNG.
               </p>
               <label className="field">
                 Heading
@@ -908,15 +908,24 @@ export default function App() {
               </label>
               <label className="field">
                 Intro
-                <textarea
+                <input
+                  type="text"
                   value={current.intro}
-                  rows={2}
                   onChange={(e) => updateThankYou({ intro: e.target.value })}
                   disabled={busy}
                 />
               </label>
               <label className="field">
-                Review note
+                Review heading
+                <input
+                  type="text"
+                  value={current.reviewTitle}
+                  onChange={(e) => updateThankYou({ reviewTitle: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Review lines
                 <textarea
                   value={current.review}
                   rows={3}
@@ -925,7 +934,16 @@ export default function App() {
                 />
               </label>
               <label className="field">
-                Free puzzle note
+                Free puzzle heading
+                <input
+                  type="text"
+                  value={current.freebieTitle}
+                  onChange={(e) => updateThankYou({ freebieTitle: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="field">
+                Free puzzle lines
                 <textarea
                   value={current.freebie}
                   rows={3}

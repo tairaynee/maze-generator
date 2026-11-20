@@ -129,17 +129,32 @@ for (const phrase of banned) {
 }
 assert(resolved.heading === 'Thank you for exploring!', 'heading');
 assert(resolved.review.includes('honest review'), 'review invitation');
-assert(resolved.freebie.includes('No review required.'), 'free PDF is not conditional');
-assert(resolved.freebie.includes('DM @iqexploratorium on Instagram'), 'free PDF names the handle');
-assert(!resolved.freebie.toLowerCase().includes('if you review'), 'free PDF is not tied to a review');
+assert(resolved.reviewTitle === 'Enjoyed the puzzles?', 'review heading');
+assert(
+  resolved.review ===
+    'Please leave an honest review on Amazon.\nYour feedback helps us make better books.',
+  'review lines',
+);
+assert(resolved.freebieTitle === 'Want more puzzles?', 'freebie heading');
+assert(
+  resolved.freebie === 'Get a free puzzle PDF.\nDM @iqexploratorium on Instagram.',
+  'freebie lines',
+);
+assert(!resolved.freebie.toLowerCase().includes('review'), 'free PDF does not mention a review');
+assert(!resolved.review.toLowerCase().includes('pdf'), 'review does not mention the free PDF');
+assert(resolved.freebie.includes('DM @iqexploratorium on Instagram.'), 'free PDF names the handle');
 assert(resolved.brand === '@iqexploratorium', 'brand is the handle');
 assert(resolved.closing === 'Happy puzzling!', 'closing');
-assert(resolved.copyright.startsWith('Copyright © 2026 IQ EXPLORATORIUM'), 'copyright year is 2026 today');
+assert(resolved.copyright.startsWith('Copyright © 2026 IQ EXPLORATORIUM.'), 'copyright year is 2026 today');
 assert(
-  resolved.copyright.includes('https://m.youtube.com/@iqexploratorium'),
-  'copyright keeps the YouTube URL',
+  resolved.copyright ===
+    'Copyright © 2026 IQ EXPLORATORIUM.\nAll rights reserved.\nNo reproduction or distribution\nwithout prior written permission.',
+  'copyright notice is set line by line',
 );
-assert(resolved.copyright.includes('puzzle book'), 'copyright says puzzle book');
+assert(!resolved.copyright.toLowerCase().includes('youtube'), 'copyright has no YouTube URL');
+assert(!resolved.copyright.includes('('), 'copyright has no parenthetical link');
+assert(resolved.copyright.includes('No reproduction or distribution'), 'copyright keeps the restriction');
+assert(resolved.copyright.includes('without prior written permission.'), 'copyright keeps the permission line');
 assert(!resolved.copyright.toLowerCase().includes('word search'), 'copyright is not a word search notice');
 assert(!resolved.copyright.includes('{year}'), 'year token is printed');
 assert(!/\b20\d\d\s*[-–]\s*20\d\d\b/.test(resolved.copyright), 'copyright is a single year');
@@ -156,11 +171,17 @@ assert(fixed.copyright.startsWith('Copyright © 2018 IQ EXPLORATORIUM'), 'manual
 const kept = migrateStoredCopy({
   heading: 'Mine',
   brand: 'Kept Press',
+  reviewTitle: 'Hello',
+  review: 'A note we wrote ourselves.',
+  freebieTitle: 'Extras',
+  freebie: 'Write to us for another maze.',
   copyright: 'Copyright © 2018 Kept Press. All rights reserved.',
   copyrightYear: 2018,
 });
 assert(kept.copy.heading === 'Mine', 'custom heading survives');
 assert(kept.copy.brand === 'Kept Press', 'custom brand survives');
+assert(kept.copy.review === 'A note we wrote ourselves.', 'custom review survives');
+assert(kept.copy.freebie === 'Write to us for another maze.', 'custom freebie survives');
 assert(kept.copy.copyright === 'Copyright © 2018 Kept Press. All rights reserved.', 'fixed notice survives');
 assert(kept.copy.copyrightYear === 2018, 'fixed year survives');
 assert(!kept.changed, 'a manual year is not rewritten');
@@ -175,6 +196,91 @@ assert(upgraded.copy.brand === '@iqexploratorium', 'old wordmark becomes the han
 assert(upgraded.copy.copyrightYear === 'auto', 'migrated year stays automatic');
 assert(upgraded.copy.copyright.includes('{year}'), 'migrated notice does not freeze 2026');
 assert(!upgraded.copy.copyright.includes('2026'), 'stored notice has no baked year');
+assert(!upgraded.copy.copyright.toLowerCase().includes('youtube'), 'untouched default drops the URL');
+const oldUrl =
+  'Copyright © {year} IQ EXPLORATORIUM (https://m.youtube.com/@iqexploratorium). All rights reserved. No part of this puzzle book may be reproduced or distributed without prior written permission.';
+const dropped = migrateStoredCopy({
+  heading: 'Thanks, puzzlers!',
+  brand: '@iqexploratorium',
+  copyright: oldUrl,
+  copyrightYear: 2018,
+});
+assert(dropped.changed, 'previous default notice is updated');
+assert(dropped.copy.heading === 'Thanks, puzzlers!', 'heading stays with the URL migration');
+assert(dropped.copy.copyrightYear === 2018, 'fixed year stays when the default URL is removed');
+assert(dropped.copy.copyright === DEFAULT_THANK_YOU_COPY.copyright, 'default notice loses the URL');
+assert(!dropped.copy.copyright.includes('youtube'), 'migrated default has no URL');
+const customUrl = migrateStoredCopy({
+  brand: '@iqexploratorium',
+  copyright: 'Copyright © {year} My House (https://m.youtube.com/@iqexploratorium). Custom.',
+  copyrightYear: 'auto',
+});
+assert(
+  customUrl.copy.copyright.includes('https://m.youtube.com/@iqexploratorium'),
+  'a custom notice that mentions the URL is kept',
+);
+assert(customUrl.copy.copyright.includes('Custom'), 'custom wording is kept');
+const oldFreebie = migrateStoredCopy({
+  heading: 'Thanks, puzzlers!',
+  brand: '@iqexploratorium',
+  freebie: 'Want more puzzles? DM {handle} on Instagram for a free puzzle PDF. No review required.',
+  review:
+    'Enjoyed the puzzles? Please consider leaving an honest review on Amazon. Your feedback helps us create better puzzle books!',
+  copyrightYear: 'auto',
+});
+assert(oldFreebie.copy.freebieTitle === 'Want more puzzles?', 'old freebie gains a heading');
+assert(
+  oldFreebie.copy.freebie === DEFAULT_THANK_YOU_COPY.freebie,
+  'untouched freebie drops the extra sentence',
+);
+assert(oldFreebie.copy.reviewTitle === 'Enjoyed the puzzles?', 'old review gains a heading');
+assert(oldFreebie.copy.review === DEFAULT_THANK_YOU_COPY.review, 'untouched review is the new lines');
+assert(oldFreebie.copy.heading === 'Thanks, puzzlers!', 'edited heading stays with the copy update');
+const customFreebie = migrateStoredCopy({
+  brand: '@iqexploratorium',
+  freebie: 'DM {handle} any time for extra mazes.',
+  freebieTitle: 'More from us',
+  review: 'A custom review sentence.',
+  reviewTitle: 'Hello',
+  copyrightYear: 'auto',
+});
+assert(customFreebie.copy.freebie === 'DM {handle} any time for extra mazes.', 'custom freebie stays');
+assert(customFreebie.copy.freebieTitle === 'More from us', 'custom freebie heading stays');
+assert(customFreebie.copy.review === 'A custom review sentence.', 'custom review stays');
+const linesOf = (role: string, size: { w: number; h: number } = { w: 5, h: 8 }) =>
+  layoutThankYou({
+    pageW: size.w,
+    pageH: size.h,
+    copy: DEFAULT_THANK_YOU_COPY,
+    artAspect: ART,
+    measure,
+    now: now2026,
+  }).lines.filter((line) => line.role === role).map((line) => line.text);
+assert(linesOf('heading').join('|') === 'Thank you for exploring!', 'heading is one line on 5x8');
+assert(linesOf('intro').join('|') === 'We hope you enjoyed these puzzles!', 'intro is one line on 5x8');
+assert(linesOf('reviewTitle').join('|') === 'Enjoyed the puzzles?', 'review heading is one line');
+assert(
+  linesOf('review').join('|') ===
+    'Please leave an honest review on Amazon.|Your feedback helps us make better books.',
+  'each review sentence is one line',
+);
+assert(linesOf('freebieTitle').join('|') === 'Want more puzzles?', 'freebie heading is one line');
+assert(
+  linesOf('freebie').join('|') === 'Get a free puzzle PDF.|DM @iqexploratorium on Instagram.',
+  'each freebie sentence is one line',
+);
+assert(
+  linesOf('copyright').join('|') ===
+    'Copyright © 2026 IQ EXPLORATORIUM.|All rights reserved.|No reproduction or distribution|without prior written permission.',
+  'copyright is deliberate lines',
+);
+for (const size of Object.values(TRIMS)) {
+  for (const role of ['heading', 'intro', 'reviewTitle', 'review', 'freebieTitle', 'freebie', 'closing', 'copyright'] as const) {
+    const parts = linesOf(role, size);
+    assert(parts.length > 0, `${role} missing on ${size.w}`);
+    assert(parts.every((line) => !line.includes(' ' ) || line.length < 80), `${role} line exploded`);
+  }
+}
 const laid2027 = layoutThankYou({
   pageW: 6,
   pageH: 9,
@@ -197,11 +303,9 @@ checkLayout(DEFAULT_THANK_YOU_COPY, 'default');
 checkLayout(
   {
     ...DEFAULT_THANK_YOU_COPY,
-    heading: 'Thanks for every puzzle in this book and the next one too',
-    review: 'Please consider an honest review. '.repeat(8).trim(),
-    freebie: 'DM {handle} on Instagram for a free puzzle PDF. No review required. '.repeat(3).trim(),
+    review: 'Please leave an honest review on Amazon.\nThank you for reading this book.',
   },
-  'long',
+  'extra line',
 );
 
 type Page = { kind: string; id: string; role?: string };
