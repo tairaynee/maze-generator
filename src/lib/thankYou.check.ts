@@ -4,6 +4,7 @@ import {
   countExportSteps,
   countPdfPages,
   layoutThankYou,
+  migrateStoredCopy,
   printHandle,
   resolveThankYouText,
   type LaidBox,
@@ -80,11 +81,35 @@ function checkLayout(copy: ThankYouCopy, label: string) {
         `${label} ${name} separator is not between the review and the free PDF note`,
       );
     }
+    const copyLines = laid.lines.filter((line) => line.role === 'copyright');
+    if (copy.copyright.trim()) {
+      assert(copyLines.length > 0, `${label} ${name} is missing the copyright`);
+      assert(
+        copyLines.every((line) => line.size >= 0.1),
+        `${label} ${name} copyright is under 7pt`,
+      );
+      const brand = laid.boxes.filter((box) => box.role === 'brand');
+      const legal = laid.boxes.filter((box) => box.role === 'copyright');
+      if (brand.length && legal.length) {
+        const brandBottom = Math.max(...brand.map((box) => box.y + box.h));
+        const legalTop = Math.min(...legal.map((box) => box.y));
+        assert(legalTop >= brandBottom + 0.06, `${label} ${name} copyright crowds the handle`);
+      }
+    }
   }
 }
 
-const resolved = resolveThankYouText(DEFAULT_THANK_YOU_COPY);
-const rendered = Object.values(resolved).join('\n');
+const now2026 = new Date(2026, 10, 20);
+const now2027 = new Date(2027, 0, 15);
+const resolved = resolveThankYouText(DEFAULT_THANK_YOU_COPY, now2026);
+const promo = [
+  resolved.heading,
+  resolved.intro,
+  resolved.review,
+  resolved.freebie,
+  resolved.closing,
+  resolved.brand,
+].join('\n');
 const banned = [
   'in exchange',
   'screenshot',
@@ -100,15 +125,70 @@ const banned = [
   'review to get',
 ];
 for (const phrase of banned) {
-  assert(!rendered.toLowerCase().includes(phrase), `default copy contains “${phrase}”`);
+  assert(!promo.toLowerCase().includes(phrase), `default copy contains “${phrase}”`);
 }
-assert(rendered.includes('Thank you for exploring!'), 'heading');
-assert(rendered.includes('honest review'), 'review invitation');
-assert(rendered.includes('No review required.'), 'free PDF is not conditional');
-assert(rendered.includes('@iqexploratorium'), 'printed handle');
-assert(rendered.includes('Happy puzzling!'), 'closing');
-assert(rendered.includes('iq exploratorium'), 'brand');
-assert(!rendered.includes('{handle}'), 'handle token left in the print');
+assert(resolved.heading === 'Thank you for exploring!', 'heading');
+assert(resolved.review.includes('honest review'), 'review invitation');
+assert(resolved.freebie.includes('No review required.'), 'free PDF is not conditional');
+assert(resolved.freebie.includes('DM @iqexploratorium on Instagram'), 'free PDF names the handle');
+assert(!resolved.freebie.toLowerCase().includes('if you review'), 'free PDF is not tied to a review');
+assert(resolved.brand === '@iqexploratorium', 'brand is the handle');
+assert(resolved.closing === 'Happy puzzling!', 'closing');
+assert(resolved.copyright.startsWith('Copyright © 2026 IQ EXPLORATORIUM'), 'copyright year is 2026 today');
+assert(
+  resolved.copyright.includes('https://m.youtube.com/@iqexploratorium'),
+  'copyright keeps the YouTube URL',
+);
+assert(resolved.copyright.includes('puzzle book'), 'copyright says puzzle book');
+assert(!resolved.copyright.toLowerCase().includes('word search'), 'copyright is not a word search notice');
+assert(!resolved.copyright.includes('{year}'), 'year token is printed');
+assert(!/\b20\d\d\s*[-–]\s*20\d\d\b/.test(resolved.copyright), 'copyright is a single year');
+const nextYear = resolveThankYouText(DEFAULT_THANK_YOU_COPY, now2027);
+assert(nextYear.copyright.startsWith('Copyright © 2027 IQ EXPLORATORIUM'), '2027 follows the clock');
+assert(!nextYear.copyright.includes('© 2026'), 'auto year does not stay on 2026');
+assert(DEFAULT_THANK_YOU_COPY.copyright.includes('{year}'), 'stored default keeps the year token');
+assert(DEFAULT_THANK_YOU_COPY.copyrightYear === 'auto', 'default year mode is auto');
+const fixed = resolveThankYouText(
+  { ...DEFAULT_THANK_YOU_COPY, copyrightYear: 2018 },
+  now2027,
+);
+assert(fixed.copyright.startsWith('Copyright © 2018 IQ EXPLORATORIUM'), 'manual year stays fixed');
+const kept = migrateStoredCopy({
+  heading: 'Mine',
+  brand: 'Kept Press',
+  copyright: 'Copyright © 2018 Kept Press. All rights reserved.',
+  copyrightYear: 2018,
+});
+assert(kept.copy.heading === 'Mine', 'custom heading survives');
+assert(kept.copy.brand === 'Kept Press', 'custom brand survives');
+assert(kept.copy.copyright === 'Copyright © 2018 Kept Press. All rights reserved.', 'fixed notice survives');
+assert(kept.copy.copyrightYear === 2018, 'fixed year survives');
+assert(!kept.changed, 'a manual year is not rewritten');
+const upgraded = migrateStoredCopy({
+  heading: 'Thanks, puzzlers!',
+  brand: 'iq exploratorium',
+  copyright: DEFAULT_THANK_YOU_COPY.copyright.split('{year}').join('2026'),
+});
+assert(upgraded.changed, 'old footer is migrated');
+assert(upgraded.copy.heading === 'Thanks, puzzlers!', 'edited heading is kept');
+assert(upgraded.copy.brand === '@iqexploratorium', 'old wordmark becomes the handle');
+assert(upgraded.copy.copyrightYear === 'auto', 'migrated year stays automatic');
+assert(upgraded.copy.copyright.includes('{year}'), 'migrated notice does not freeze 2026');
+assert(!upgraded.copy.copyright.includes('2026'), 'stored notice has no baked year');
+const laid2027 = layoutThankYou({
+  pageW: 6,
+  pageH: 9,
+  copy: DEFAULT_THANK_YOU_COPY,
+  artAspect: ART,
+  measure,
+  now: now2027,
+});
+assert(
+  laid2027.lines.some((line) => line.role === 'copyright' && line.text.includes('2027')),
+  'layout prints 2027 when the clock says 2027',
+);
+assert(!laid2027.lines.some((line) => line.text.includes('2026')), '2026 is not left on the 2027 page');
+assert(!resolveThankYouText(DEFAULT_THANK_YOU_COPY, now2026).copyright.includes('{handle}'), 'tokens');
 assert(printHandle('iqexploratorium') === '@iqexploratorium', 'handle gains @');
 assert(printHandle('  bad handle! ') === '@badhandle', 'handle strips spaces');
 assert(printHandle('') === '@iqexploratorium', 'empty handle falls back');

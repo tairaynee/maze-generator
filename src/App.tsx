@@ -26,7 +26,7 @@ import {
   type PageSize,
   type SolutionMode,
 } from './lib/book';
-import { applyEndPage, printHandle, sanitizeCopy, type ThankYouCopy } from './lib/thankYouLayout';
+import { applyEndPage, printHandle, printedYear, sanitizeCopy, type ThankYouCopy } from './lib/thankYouLayout';
 import {
   createThankYouPage,
   loadEndPageSetting,
@@ -962,10 +962,64 @@ export default function App() {
                 <input
                   type="text"
                   value={current.brand}
+                  placeholder="@iqexploratorium"
                   onChange={(e) => updateThankYou({ brand: e.target.value })}
                   disabled={busy}
                 />
               </label>
+              <label className="field">
+                Copyright year
+                <select
+                  value={current.copyrightYear === 'auto' ? 'auto' : 'fixed'}
+                  onChange={(e) => {
+                    if (e.target.value === 'auto') updateThankYou({ copyrightYear: 'auto' });
+                    else {
+                      const year =
+                        typeof current.copyrightYear === 'number'
+                          ? current.copyrightYear
+                          : new Date().getFullYear();
+                      updateThankYou({ copyrightYear: year });
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  <option value="auto">Auto — current year</option>
+                  <option value="fixed">Fixed year</option>
+                </select>
+              </label>
+              {current.copyrightYear !== 'auto' && (
+                <label className="field">
+                  Fixed year
+                  <input
+                    type="number"
+                    min={1000}
+                    max={9999}
+                    value={current.copyrightYear}
+                    onChange={(e) => {
+                      const year = Number(e.target.value);
+                      if (Number.isInteger(year) && year >= 1000 && year <= 9999) {
+                        updateThankYou({ copyrightYear: year });
+                      }
+                    }}
+                    disabled={busy}
+                  />
+                </label>
+              )}
+              <label className="field">
+                Copyright
+                <textarea
+                  value={current.copyright}
+                  rows={4}
+                  onChange={(e) => updateThankYou({ copyright: e.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <p className="note">
+                {'{year}'} prints © {printedYear(current.copyrightYear)}. Auto uses the
+                calendar year when you open the generator or export, so next year
+                it prints the new year without an update. A fixed year stays as
+                set. PDFs already downloaded keep the year they were printed with.
+              </p>
               <div className="row">
                 <button className="danger" onClick={() => setThankYouIncluded(false)} disabled={busy}>
                   Remove thank-you page

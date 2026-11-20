@@ -9,8 +9,19 @@ export interface ThankYouCopy {
   freebie: string;
   instagram: string;
   closing: string;
+  /** Printed under the drawing, above the copyright. */
   brand: string;
+  /**
+   * Small print at the foot. `{year}` prints the copyright year.
+   * Stored with the token so Auto does not freeze a calendar year.
+   */
+  copyright: string;
+  /** `'auto'` follows the calendar year. A number is a fixed year and is kept. */
+  copyrightYear: 'auto' | number;
 }
+
+/** Wordmark used before the footer showed the Instagram handle. */
+export const PREVIOUS_DEFAULT_BRAND = 'iq exploratorium';
 
 export const DEFAULT_THANK_YOU_COPY: ThankYouCopy = {
   heading: 'Thank you for exploring!',
@@ -21,10 +32,13 @@ export const DEFAULT_THANK_YOU_COPY: ThankYouCopy = {
     'Want more puzzles? DM {handle} on Instagram for a free puzzle PDF. No review required.',
   instagram: '@iqexploratorium',
   closing: 'Happy puzzling!',
-  brand: 'iq exploratorium',
+  brand: '@iqexploratorium',
+  copyright:
+    'Copyright © {year} IQ EXPLORATORIUM (https://m.youtube.com/@iqexploratorium). All rights reserved. No part of this puzzle book may be reproduced or distributed without prior written permission.',
+  copyrightYear: 'auto',
 };
 
-const LIMITS: Record<keyof ThankYouCopy, number> = {
+const LIMITS: Record<Exclude<keyof ThankYouCopy, 'copyrightYear'>, number> = {
   heading: 160,
   intro: 700,
   review: 700,
@@ -32,11 +46,37 @@ const LIMITS: Record<keyof ThankYouCopy, number> = {
   instagram: 40,
   closing: 120,
   brand: 80,
+  copyright: 500,
 };
+
+/** Notice with a calendar year baked in, from before Auto stored `{year}`. */
+function frozenDefaultCopyright(year: number): string {
+  return DEFAULT_THANK_YOU_COPY.copyright.split('{year}').join(String(year));
+}
+
+const FROZEN_DEFAULT_COPYRIGHTS = new Set([
+  frozenDefaultCopyright(2025),
+  frozenDefaultCopyright(2026),
+]);
+
+export function copyrightYearSetting(value: unknown): 'auto' | number {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 1000 && value <= 9999) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\d{4}$/.test(value)) {
+    const year = Number(value);
+    if (year >= 1000 && year <= 9999) return year;
+  }
+  return 'auto';
+}
+
+export function printedYear(setting: 'auto' | number, now: Date = new Date()): number {
+  return setting === 'auto' ? now.getFullYear() : setting;
+}
 
 export function sanitizeCopy(input: Partial<ThankYouCopy> | null | undefined): ThankYouCopy {
   const d = DEFAULT_THANK_YOU_COPY;
-  const str = (key: keyof ThankYouCopy) => {
+  const str = (key: Exclude<keyof ThankYouCopy, 'copyrightYear'>) => {
     const v = input?.[key];
     return typeof v === 'string' ? v.slice(0, LIMITS[key]) : d[key];
   };
@@ -48,7 +88,48 @@ export function sanitizeCopy(input: Partial<ThankYouCopy> | null | undefined): T
     instagram: str('instagram'),
     closing: str('closing'),
     brand: str('brand'),
+    copyright: str('copyright'),
+    copyrightYear: copyrightYearSetting(input?.copyrightYear),
   };
+}
+
+/** Fill a saved end-page with the current footer when it still has the old
+ *  wordmark or a baked default year. A fixed `copyrightYear` and any edited
+ *  notice are left as stored. */
+export function migrateStoredCopy(input: Partial<ThankYouCopy> | null | undefined): {
+  copy: ThankYouCopy;
+  changed: boolean;
+} {
+  const copy = sanitizeCopy(input);
+  if (!input) return { copy, changed: false };
+  let changed = false;
+
+  const rawBrand = typeof input.brand === 'string' ? input.brand.trim().toLowerCase() : '';
+  if (rawBrand === PREVIOUS_DEFAULT_BRAND) {
+    copy.brand = DEFAULT_THANK_YOU_COPY.brand;
+    changed = true;
+  }
+
+  if (input.copyrightYear == null) {
+    copy.copyrightYear = 'auto';
+    changed = true;
+  } else {
+    copy.copyrightYear = copyrightYearSetting(input.copyrightYear);
+  }
+
+  if (typeof input.copyright !== 'string') {
+    copy.copyright = DEFAULT_THANK_YOU_COPY.copyright;
+    copy.copyrightYear = 'auto';
+    changed = true;
+  } else if (
+    copy.copyrightYear === 'auto' &&
+    FROZEN_DEFAULT_COPYRIGHTS.has(input.copyright.trim())
+  ) {
+    copy.copyright = DEFAULT_THANK_YOU_COPY.copyright;
+    changed = true;
+  }
+
+  return { copy, changed };
 }
 
 /** Printed handle only. Empty or unusable input falls back to the house handle
@@ -70,10 +151,12 @@ export interface ResolvedThankYou {
   freebie: string;
   closing: string;
   brand: string;
+  copyright: string;
 }
 
-export function resolveThankYouText(copy: ThankYouCopy): ResolvedThankYou {
+export function resolveThankYouText(copy: ThankYouCopy, now: Date = new Date()): ResolvedThankYou {
   const handle = printHandle(copy.instagram);
+  const year = String(printedYear(copyrightYearSetting(copy.copyrightYear), now));
   return {
     heading: copy.heading.trim(),
     intro: copy.intro.trim(),
@@ -81,6 +164,7 @@ export function resolveThankYouText(copy: ThankYouCopy): ResolvedThankYou {
     freebie: copy.freebie.split('{handle}').join(handle).trim(),
     closing: copy.closing.trim(),
     brand: copy.brand.trim(),
+    copyright: copy.copyright.trim().split('{year}').join(year),
   };
 }
 
@@ -94,7 +178,14 @@ export interface LaidBox {
   h: number;
 }
 
-export type ThankYouRole = 'heading' | 'intro' | 'review' | 'freebie' | 'closing' | 'brand';
+export type ThankYouRole =
+  | 'heading'
+  | 'intro'
+  | 'review'
+  | 'freebie'
+  | 'closing'
+  | 'brand'
+  | 'copyright';
 
 export interface LaidLine {
   role: ThankYouRole;
@@ -217,9 +308,23 @@ function compose(opts: ComposeOpts): ThankYouLayout {
   push('closing', text.closing, closingSize, true, 0);
 
   const showRule = Boolean(text.review && text.freebie);
-  const brandBaseline = pageH - margin - (text.brand ? brandSize * 0.42 : 0);
-  const brandTop = text.brand ? brandBaseline - brandSize * 0.86 : pageH - margin;
-  const minArt = artAspect > 0 ? 0.72 : 0;
+  // Keep the legal line near 7.5–9 pt. It should not shrink with the
+  // headline when a long page scales down.
+  const copyrightSize = clamp(pageW * 0.019, 0.105, 0.128) * (0.92 + 0.08 * scale);
+  const copyrightLines = text.copyright
+    ? wrapText(text.copyright, copyrightSize, false, maxW, measure).filter(Boolean)
+    : [];
+  const copyrightStep = copyrightSize * 1.48;
+  const copyrightBlock = copyrightLines.length * copyrightStep;
+  const copyrightTop = pageH - margin - copyrightBlock;
+  const brandGap = text.brand && copyrightLines.length ? 0.16 : 0;
+  const brandBaseline = text.brand
+    ? (copyrightLines.length
+        ? copyrightTop - brandGap - brandSize * 0.4
+        : pageH - margin - brandSize * 0.42)
+    : copyrightTop;
+  const brandTop = text.brand ? brandBaseline - brandSize * 0.86 : copyrightTop;
+  const minArt = artAspect > 0 ? 0.68 : 0;
   const gap = 0.16;
   const textLimit = clip ? brandTop - gap - minArt - gap : pageH;
 
@@ -316,6 +421,16 @@ function compose(opts: ComposeOpts): ThankYouLayout {
       weight: Math.max(0.012, brandSize * 0.07),
     };
   }
+  copyrightLines.forEach((ln, i) => {
+    lines.push({
+      role: 'copyright',
+      text: ln,
+      x: pageW / 2,
+      baseline: copyrightTop + copyrightSize * 0.82 + i * copyrightStep,
+      size: copyrightSize,
+      bold: false,
+    });
+  });
 
   const boxes: LaidBox[] = [];
   for (const line of lines) {
@@ -400,6 +515,13 @@ function acceptable(layout: ThankYouLayout): boolean {
     const closingBottom = Math.max(...closing.map((b) => b.y + b.h));
     if (art.y < closingBottom + 0.08) return false;
   }
+  const brandBoxes = boxes.filter((b) => b.role === 'brand');
+  const copyrightBoxes = boxes.filter((b) => b.role === 'copyright');
+  if (brandBoxes.length && copyrightBoxes.length) {
+    const brandBottom = Math.max(...brandBoxes.map((b) => b.y + b.h));
+    const copyTop = Math.min(...copyrightBoxes.map((b) => b.y));
+    if (copyTop < brandBottom + 0.06) return false;
+  }
   const review = boxes.filter((b) => b.role === 'review');
   const freebie = boxes.filter((b) => b.role === 'freebie');
   if (review.length && freebie.length && layout.rule) {
@@ -416,8 +538,9 @@ export function layoutThankYou(args: {
   copy: ThankYouCopy;
   artAspect: number;
   measure: Measure;
+  now?: Date;
 }): ThankYouLayout {
-  const text = resolveThankYouText(args.copy);
+  const text = resolveThankYouText(args.copy, args.now ?? new Date());
   const attempts: Array<{ scale: number; top: number }> = [];
   for (const top of [0.115, 0.09, 0.07]) {
     for (const scale of [1, 0.94, 0.88, 0.82, 0.76, 0.7]) {

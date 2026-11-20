@@ -8,6 +8,7 @@ import type { BookPage } from './book';
 import {
   DEFAULT_THANK_YOU_COPY,
   layoutThankYou,
+  migrateStoredCopy,
   sanitizeCopy,
   type Measure,
   type ThankYouCopy,
@@ -33,10 +34,10 @@ export function loadEndPageSetting(): EndPageSetting {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     const data = JSON.parse(raw) as { included?: unknown; copy?: Partial<ThankYouCopy> };
-    return {
-      included: typeof data.included === 'boolean' ? data.included : true,
-      copy: sanitizeCopy(data.copy),
-    };
+    const included = typeof data.included === 'boolean' ? data.included : true;
+    const migrated = migrateStoredCopy(data.copy);
+    if (migrated.changed) saveEndPageSetting({ included, copy: migrated.copy });
+    return { included, copy: migrated.copy };
   } catch {
     return fallback;
   }
@@ -155,9 +156,9 @@ function drawPaleMaze(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
   ctx.save();
   ctx.translate(inset, inset);
-  ctx.strokeStyle = '#d5d5d5';
-  ctx.fillStyle = '#d5d5d5';
-  ctx.lineWidth = Math.max(1.2, Math.min(cw, ch) * 0.09);
+  ctx.strokeStyle = '#f2f2f2';
+  ctx.fillStyle = '#f2f2f2';
+  ctx.lineWidth = Math.max(0.75, Math.min(cw, ch) * 0.06);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
